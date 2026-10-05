@@ -325,9 +325,10 @@
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <!-- GRAFIK 1: TREN PENJUALAN PER PERIODE WAKTU -->
           <div class="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col justify-between">
             <div>
-              <h3 class="text-xs font-bold uppercase tracking-wider text-slate-500 text-center mb-4">INFORMASI PENJUALAN INU CHICKEN</h3>
+              <h3 class="text-xs font-bold uppercase tracking-wider text-slate-500 text-center mb-4" id="trendChartTitle">TREN PENJUALAN PER WAKTU</h3>
               <div class="relative h-64 w-full">
                 <canvas id="productBarChart"></canvas>
               </div>
@@ -347,6 +348,7 @@
             </div>
           </div>
 
+          <!-- GRAFIK 2: MENU TERLARIS BERDASARKAN PERIODE -->
           <div class="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col justify-between">
             <div>
               <h3 class="text-xs font-bold uppercase tracking-wider text-slate-500 text-center mb-4">INFORMASI PENJUALAN TERLARIS</h3>
@@ -1572,9 +1574,9 @@ function setDashboardFilter(filter) {
 
   const labels = {
     today: "Menampilkan data hari ini",
-    "7days": "Menampilkan data 7 hari terakhir",
-    month: "Menampilkan data bulan ini",
-    all: "Menampilkan seluruh data"
+    "7days": "Menampilkan data 7 hari terakhir (Per Hari)",
+    month: "Menampilkan data bulan ini (Per Minggu)",
+    all: "Menampilkan seluruh data (Per Bulan)"
   };
   document.getElementById("dashboardFilterLabel").innerText = labels[filter];
   renderDashboard();
@@ -1622,7 +1624,6 @@ function renderDashboard() {
   const filtered = filterDataByPeriod(salesData, activeFilter);
   let totalOmset = 0, omsetTunai = 0, omsetNonTunai = 0, totalAyamNasiQty = 0;
 
-  // DIHITUNG DARI DATA TRANSAKSI YANG LOLOS FILTER PERIODE
   const productSummary = {
     "Nasi + Ayam": { omset: 0, qty: 0 },
     "Ayam": { omset: 0, qty: 0 },
@@ -1655,13 +1656,12 @@ function renderDashboard() {
   document.getElementById("dashOmsetNonTunai").innerText = formatRupiah(omsetNonTunai);
   document.getElementById("dashTotalAyamNasiQty").innerText = `${totalAyamNasiQty} pcs`;
 
-  renderCharts(productSummary, { "Tunai": omsetTunai, "Non-Tunai": omsetNonTunai });
+  renderCharts(productSummary, filtered);
   renderTable(salesData);
 }
 
-function renderCharts(productSummary, paymentMethods) {
-  const products = Object.keys(productSummary);
-  const omsetValues = products.map(p => productSummary[p].omset);
+// LOGIKA TREN WAKTU PERIODE UNTUK GRAFIK KIRI & PERINGKAT TERLARIS BERDASARKAN FILTER
+function renderCharts(productSummary, filteredData) {
   const barCanvas = document.getElementById("productBarChart");
   const topSalesCanvas = document.getElementById("topSalesBarChart");
 
@@ -1669,12 +1669,83 @@ function renderCharts(productSummary, paymentMethods) {
   if (barChartInstance) barChartInstance.destroy();
   if (topSalesChartInstance) topSalesChartInstance.destroy();
 
-  // 1. GRAFIK KIRI: INFORMASI PENJUALAN INU CHICKEN (MENGIKUTI PERIODE AKTIF)
+  // 1. GRAFIK KIRI: AGREGASI TREN BERDASARKAN FILTER (HARI INI / PER HARI / PER MINGGU / PER BULAN)
+  let timeLabels = [];
+  let timeOmsetValues = [];
+  let timeQtyValues = [];
+  let titleText = "INFORMASI PENJUALAN INU CHICKEN";
+
+  if (activeFilter === "today") {
+    titleText = "PENJUALAN PER MENU (HARI INI)";
+    timeLabels = Object.keys(productSummary);
+    timeOmsetValues = timeLabels.map(p => productSummary[p].omset);
+    timeQtyValues = timeLabels.map(p => productSummary[p].qty);
+  } else if (activeFilter === "7days") {
+    titleText = "TREN PENJUALAN 7 HARI TERAKHIR (PER HARI)";
+    const dayMap = {};
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dayLabel = d.toLocaleDateString("id-ID", { weekday: "short", day: "numeric" });
+      dayMap[dayLabel] = { omset: 0, qty: 0 };
+    }
+    filteredData.forEach(row => {
+      const d = parseTransactionDate(getRowDateString(row));
+      if (d) {
+        const dayLabel = d.toLocaleDateString("id-ID", { weekday: "short", day: "numeric" });
+        if (dayMap[dayLabel]) {
+          dayMap[dayLabel].omset += getNumericValue(row["Total Harga"] || row["Total"]);
+          dayMap[dayLabel].qty += Number(row["Jumlah"] || row["Qty"]) || 0;
+        }
+      }
+    });
+    timeLabels = Object.keys(dayMap);
+    timeOmsetValues = timeLabels.map(k => dayMap[k].omset);
+    timeQtyValues = timeLabels.map(k => dayMap[k].qty);
+  } else if (activeFilter === "month") {
+    titleText = "TREN PENJUALAN BULAN INI (PER MINGGU)";
+    const weekMap = { "Minggu 1": { omset: 0, qty: 0 }, "Minggu 2": { omset: 0, qty: 0 }, "Minggu 3": { omset: 0, qty: 0 }, "Minggu 4+": { omset: 0, qty: 0 } };
+    filteredData.forEach(row => {
+      const d = parseTransactionDate(getRowDateString(row));
+      if (d) {
+        const dateNum = d.getDate();
+        let wKey = "Minggu 1";
+        if (dateNum > 21) wKey = "Minggu 4+";
+        else if (dateNum > 14) wKey = "Minggu 3";
+        else if (dateNum > 7) wKey = "Minggu 2";
+
+        weekMap[wKey].omset += getNumericValue(row["Total Harga"] || row["Total"]);
+        weekMap[wKey].qty += Number(row["Jumlah"] || row["Qty"]) || 0;
+      }
+    });
+    timeLabels = Object.keys(weekMap);
+    timeOmsetValues = timeLabels.map(k => weekMap[k].omset);
+    timeQtyValues = timeLabels.map(k => weekMap[k].qty);
+  } else if (activeFilter === "all") {
+    titleText = "TREN PENJUALAN KESELURUHAN (PER BULAN)";
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+    const monthMap = {};
+    filteredData.forEach(row => {
+      const d = parseTransactionDate(getRowDateString(row));
+      if (d) {
+        const mKey = `${monthNames[d.getMonth()]} ${d.getFullYear()}`;
+        if (!monthMap[mKey]) monthMap[mKey] = { omset: 0, qty: 0 };
+        monthMap[mKey].omset += getNumericValue(row["Total Harga"] || row["Total"]);
+        monthMap[mKey].qty += Number(row["Jumlah"] || row["Qty"]) || 0;
+      }
+    });
+    timeLabels = Object.keys(monthMap);
+    timeOmsetValues = timeLabels.map(k => monthMap[k].omset);
+    timeQtyValues = timeLabels.map(k => monthMap[k].qty);
+  }
+
+  document.getElementById("trendChartTitle").innerText = titleText;
+
   barChartInstance = new Chart(barCanvas.getContext("2d"), {
     type: "bar",
     data: {
-      labels: products,
-      datasets: [{ label: "NILAI", data: omsetValues, backgroundColor: "#ea580c", borderRadius: 6, barPercentage: 0.45 }]
+      labels: timeLabels,
+      datasets: [{ label: "NILAI", data: timeOmsetValues, backgroundColor: "#ea580c", borderRadius: 6, barPercentage: 0.45 }]
     },
     options: {
       responsive: true,
@@ -1684,14 +1755,13 @@ function renderCharts(productSummary, paymentMethods) {
         tooltip: {
           callbacks: {
             label: function(context) {
-              const prodName = context.label;
-              const qty = productSummary[prodName] ? productSummary[prodName].qty : 0;
-              return [` NILAI: ${formatRupiah(context.raw)}`, ` QTY: ${qty}`];
+              const idx = context.dataIndex;
+              return [` OMSET: ${formatRupiah(context.raw)}`, ` QTY: ${timeQtyValues[idx] || 0}`];
             }
           }
         }
       },
-      scales: { x: { grid: { display: false }, ticks: { display: false } }, y: { beginAtZero: true, display: false } }
+      scales: { x: { grid: { display: false } }, y: { beginAtZero: true, display: false } }
     }
   });
 
@@ -1699,18 +1769,18 @@ function renderCharts(productSummary, paymentMethods) {
   const trNilai = document.getElementById("trNilaiBarang");
   const trQty = document.getElementById("trQtyBarang");
 
-  trNama.innerHTML = `<td class="p-2 text-left font-extrabold text-slate-600 bg-slate-100 dark:bg-slate-800 w-32">NAMA BARANG</td>`;
+  trNama.innerHTML = `<td class="p-2 text-left font-extrabold text-slate-600 bg-slate-100 dark:bg-slate-800 w-32">PERIODE / MENU</td>`;
   trNilai.innerHTML = `<td class="p-2 text-left font-extrabold text-brand-600 bg-slate-50 dark:bg-slate-800/80 w-32">NILAI</td>`;
   trQty.innerHTML = `<td class="p-2 text-left font-extrabold text-blue-600 dark:text-blue-400 bg-blue-100/50 dark:bg-blue-900/40 w-32">QTY</td>`;
 
-  products.forEach(p => {
-    const data = productSummary[p] || { omset: 0, qty: 0 };
-    trNama.innerHTML += `<td class="p-2 font-bold uppercase text-slate-700 dark:text-slate-200 border-l border-slate-200 dark:border-slate-700">${escapeHtml(p)}</td>`;
-    trNilai.innerHTML += `<td class="p-2 font-bold text-brand-600 border-l border-slate-200 dark:border-slate-700">${formatRupiah(data.omset)}</td>`;
-    trQty.innerHTML += `<td class="p-2 font-black text-blue-600 dark:text-blue-400 border-l border-slate-200 dark:border-slate-700">${data.qty}</td>`;
+  timeLabels.forEach((lbl, idx) => {
+    trNama.innerHTML += `<td class="p-2 font-bold uppercase text-slate-700 dark:text-slate-200 border-l border-slate-200 dark:border-slate-700">${escapeHtml(lbl)}</td>`;
+    trNilai.innerHTML += `<td class="p-2 font-bold text-brand-600 border-l border-slate-200 dark:border-slate-700">${formatRupiah(timeOmsetValues[idx])}</td>`;
+    trQty.innerHTML += `<td class="p-2 font-black text-blue-600 dark:text-blue-400 border-l border-slate-200 dark:border-slate-700">${timeQtyValues[idx] || 0}</td>`;
   });
 
-  // 2. GRAFIK KANAN: INFORMASI PENJUALAN TERLARIS (TERURUT KANAN BERDASARKAN PERIODE AKTIF)
+  // 2. GRAFIK KANAN: INFORMASI PENJUALAN TERLARIS (PERIODE AKTIF)
+  const products = Object.keys(productSummary);
   const sortedProducts = products.slice().sort((a, b) => (productSummary[b].qty || 0) - (productSummary[a].qty || 0));
   const topOmsetValues = sortedProducts.map(p => productSummary[p].omset);
 
@@ -1735,7 +1805,7 @@ function renderCharts(productSummary, paymentMethods) {
           }
         }
       },
-      scales: { x: { grid: { display: false }, ticks: { display: false } }, y: { beginAtZero: true, display: false } }
+      scales: { x: { grid: { display: false } }, y: { beginAtZero: true, display: false } }
     }
   });
 
