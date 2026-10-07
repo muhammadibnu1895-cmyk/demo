@@ -1,3 +1,65 @@
+Berikut adalah penyesuaian terbaru sesuai permintaan Anda:
+
+1. **Menghilangkan Total Periode Kalender**: Kotak ringkasan "Total Periode Kalender" sudah dihapus. Sekarang hanya menampilkan **Kehadiran Kasir Riil** dan **Sakit/Izin**.
+2. **Tanggal Mulai & Selesai Otomatis**: Input tanggal diset menjadi `disabled` (terkunci otomatis). Tanggal Mulai dan Tanggal Selesai otomatis terisi dari tanggal absensi paling awal dan paling akhir milik kasir yang dipilih.
+3. **Tab Log Error Aplikasi di Menu Admin**: Menambahkan tab **"Log Error"** di nav Admin serta tabel khusus untuk memantau bug/error jaringan, error backend Apps Script, atau error runtime secara real-time.
+
+---
+
+### 1. Update Backend Google Apps Script (`Code.gs`)
+
+Tambahkan fungsi pencatatan dan pengambilan **Log Error** di Apps Script:
+
+```javascript
+// TAMBAHKAN DI DALAM doPost(e)
+if (action === "logError") {
+  return recordErrorLog(requestData);
+}
+
+// TAMBAHKAN DI DALAM getData()
+var errorSheet = ss.getSheetByName("ErrorLogs");
+var errorData = errorSheet ? getSheetData(errorSheet) : [];
+
+// Kembalikan errorData di JSON getData()
+return ContentService.createTextOutput(JSON.stringify({
+  status: "success",
+  data: salesData,
+  masterHpp: masterHppData,
+  hppData: hppData,
+  absensiData: absensiData,
+  gajiData: gajiData,
+  errorData: errorData
+})).setMimeType(ContentService.MimeType.JSON);
+
+// FUNGSI MENCATAT ERROR DARI FRONTEND/BACKEND
+function recordErrorLog(data) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("ErrorLogs");
+  if (!sheet) {
+    sheet = ss.insertSheet("ErrorLogs");
+    sheet.appendRow(["ID Error", "Waktu", "User / Role", "Message", "Stack / Detail"]);
+  }
+
+  var now = new Date();
+  var timeStr = Utilities.formatDate(now, ss.getSpreadsheetTimeZone(), "dd/MM/yyyy HH:mm:ss");
+  
+  sheet.appendRow([
+    "ERR-" + now.getTime(),
+    timeStr,
+    data.user || "System",
+    data.message || "Unknown Error",
+    data.detail || "-"
+  ]);
+
+  return ContentService.createTextOutput(JSON.stringify({ status: "success" })).setMimeType(ContentService.MimeType.JSON);
+}
+```
+
+---
+
+### 2. File Utuh `index.html`
+
+```html
 <!DOCTYPE html>
 <html lang="id" class="h-full">
 
@@ -288,6 +350,8 @@
         <button id="tabBtnCosting" onclick="showAdminSubTab('costing')" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"><i class="fa-solid fa-receipt"></i> HPP</button>
         <button id="tabBtnGaji" onclick="showAdminSubTab('gaji')" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"><i class="fa-solid fa-file-invoice-dollar"></i> Data Gaji</button>
         <button id="tabBtnData" onclick="showAdminSubTab('data')" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"><i class="fa-solid fa-database"></i> Data Transaksi</button>
+        <!-- TAB LOG ERROR AKAN TAMPIL KHUSUS ADMIN -->
+        <button id="tabBtnErrorLog" onclick="showAdminSubTab('errorLog')" class="px-4 py-2 rounded-xl text-xs font-bold bg-red-100 dark:bg-red-950/40 text-red-600 dark:text-red-400"><i class="fa-solid fa-bug"></i> Log Error</button>
       </div>
 
       <!-- ANALISIS PENJUALAN -->
@@ -501,12 +565,11 @@
 
       <!-- TAB GAJI KARYAWAN -->
       <div id="subTabGaji" class="hidden space-y-6">
-        <!-- FORM KALKULATOR GAJI -->
         <section class="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm space-y-4">
           <div class="border-b border-slate-100 dark:border-slate-800 pb-3 flex flex-wrap justify-between items-center gap-2">
             <div>
               <h3 class="text-base font-bold"><i class="fa-solid fa-calculator text-brand-600"></i> Hitung Gaji Karyawan</h3>
-              <p class="text-xs text-slate-400">Pilih nama karyawan. Tanggal mulai & selesai akan otomatis menyesuaikan dengan data absensi riil.</p>
+              <p class="text-xs text-slate-400">Pilih nama karyawan. Tanggal mulai & selesai otomatis membaca data absensi riil.</p>
             </div>
             <button onclick="saveSalaryToSheet()" id="btnSaveSalary" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-md transition flex items-center gap-2">
               <i class="fa-solid fa-floppy-disk"></i> Simpan Rekap Gaji ke Sheet
@@ -514,8 +577,7 @@
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
-              <label class="block text-xs font-semibold text-slate-500 mb-1">Pilih / Ketik Nama Karyawan</label>
-              <!-- DROPDOWN PILIHAN NAMA DARI ABSENSI + INPUT MANUAL -->
+              <label class="block text-xs font-semibold text-slate-500 mb-1">Nama Karyawan</label>
               <div class="relative">
                 <input type="text" id="salEmployeeName" list="employeeListOptions" placeholder="Pilih/Ketik nama..." onchange="onEmployeeNameChange()" oninput="calculateSalaryFromDates()" class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold focus:ring-2 focus:ring-brand-500 focus:outline-none">
                 <datalist id="employeeListOptions"></datalist>
@@ -523,15 +585,15 @@
             </div>
             <div>
               <label class="block text-xs font-semibold text-slate-500 mb-1">Tanggal Mulai (Otomatis)</label>
-              <input type="date" id="salStartDate" onchange="calculateSalaryFromDates()" class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs">
+              <input type="date" id="salStartDate" disabled class="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800/60 text-slate-500 border border-slate-200 dark:border-slate-700 rounded-xl text-xs cursor-not-allowed">
             </div>
             <div>
               <label class="block text-xs font-semibold text-slate-500 mb-1">Tanggal Selesai (Otomatis)</label>
-              <input type="date" id="salEndDate" onchange="calculateSalaryFromDates()" class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs">
+              <input type="date" id="salEndDate" disabled class="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800/60 text-slate-500 border border-slate-200 dark:border-slate-700 rounded-xl text-xs cursor-not-allowed">
             </div>
             <div>
               <label class="block text-xs font-semibold text-slate-500 mb-1">Gaji / Hari (Rp)</label>
-              <input type="number" id="salDailyRate" value="33000" oninput="calculateSalaryFromDates()" class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold">
+              <input type="number" id="salDailyRate" value="50000" oninput="calculateSalaryFromDates()" class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold">
             </div>
             <div>
               <label class="block text-xs font-semibold text-amber-600 mb-1">Hari Sakit / Izin</label>
@@ -543,24 +605,20 @@
             </div>
           </div>
 
-          <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            <div class="bg-slate-50 dark:bg-slate-800 p-3 rounded-xl">
-              <span class="text-[11px] text-slate-500">Total Periode Kalender</span>
-              <span id="salTotalDaysDisplay" class="text-sm font-bold block">0 Hari</span>
-            </div>
+          <div class="grid grid-cols-2 gap-3">
             <div class="bg-emerald-50 dark:bg-emerald-950/30 p-3 rounded-xl">
-              <span class="text-[11px] text-emerald-600">Kehadiran Kasir Riil</span>
-              <span id="salWorkDaysDisplay" class="text-sm font-bold block">0 Hari</span>
+              <span class="text-[11px] text-emerald-600 font-semibold">Kehadiran Kasir Riil</span>
+              <span id="salWorkDaysDisplay" class="text-base font-black text-emerald-700 dark:text-emerald-400 block">0 Hari</span>
             </div>
             <div class="bg-amber-50 dark:bg-amber-950/30 p-3 rounded-xl">
-              <span class="text-[11px] text-amber-600">Sakit / Izin</span>
-              <span id="salSickDaysDisplay" class="text-sm font-bold block">0 Hari</span>
+              <span class="text-[11px] text-amber-600 font-semibold">Sakit / Izin</span>
+              <span id="salSickDaysDisplay" class="text-base font-black text-amber-700 dark:text-amber-400 block">0 Hari</span>
             </div>
           </div>
 
           <div class="bg-brand-50 dark:bg-brand-950/40 p-4 rounded-2xl border border-brand-200 dark:border-brand-900/50 flex flex-wrap justify-between items-center gap-3">
             <div>
-              <p class="text-xs uppercase font-bold text-brand-600">Total Gaji Bersih Hari Ini</p>
+              <p class="text-xs uppercase font-bold text-brand-600">Total Gaji Bersih</p>
               <p id="salTotalDisplay" class="text-2xl font-black text-brand-700">Rp 0</p>
               <p id="salDetailFormula" class="text-[11px] text-slate-500">-</p>
             </div>
@@ -629,6 +687,35 @@
                 </tr>
               </thead>
               <tbody id="salesTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <!-- SUB TAB LOG ERROR APLIKASI -->
+      <div id="subTabErrorLog" class="hidden space-y-4">
+        <section class="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm space-y-4">
+          <div class="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-3">
+            <div>
+              <h3 class="text-base font-bold text-red-600"><i class="fa-solid fa-bug"></i> Log Error & Bug Sistem</h3>
+              <p class="text-xs text-slate-400">Memantau kegagalan sistem, error jaringan, atau masalah server.</p>
+            </div>
+            <button onclick="fetchSalesData()" class="px-3 py-1 bg-slate-100 dark:bg-slate-800 text-xs font-bold rounded-lg hover:bg-slate-200 transition">
+              <i class="fa-solid fa-rotate"></i> Refresh Error
+            </button>
+          </div>
+          <div class="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
+            <table class="w-full text-xs text-left">
+              <thead class="bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-400">
+                <tr>
+                  <th class="py-3 px-3">ID Error</th>
+                  <th class="py-3 px-3">Waktu</th>
+                  <th class="py-3 px-3">User / Role</th>
+                  <th class="py-3 px-3">Pesan Error</th>
+                  <th class="py-3 px-3">Detail / Stack Trace</th>
+                </tr>
+              </thead>
+              <tbody id="errorLogTableBody"></tbody>
             </table>
           </div>
         </section>
@@ -707,7 +794,7 @@
   </div>
 
 <script>
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzOEF-gxRjI061DUiZ2eAQR6iVSfIO0JRs-Oo7YLTkzH07H8SfgMfAexbstCd6bdMSfZQ/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxqnpjgoLlPVZDSjvAy5Amy0YZl1Vf9AG9wwxPqsXjut1i96DzUqySM3OrBIPEhQDvwUQ/exec";
 
 let cart = [];
 let salesData = [];
@@ -716,6 +803,7 @@ let dailyMaterialsData = [];
 let hppHistoryData = [];
 let attendanceData = [];
 let salaryHistoryData = [];
+let errorLogData = [];
 
 let activeFilter = "today";
 let activeExpenseFilter = "today";
@@ -725,6 +813,27 @@ let currentPaymentMethod = "Tunai";
 let barChartInstance = null;
 let topSalesChartInstance = null;
 let expenseChartInstance = null;
+
+// PENGAMAN MENANGKAP UNCAUGHT ERROR & MENGIRIM KE GOOGLE SHEETS
+window.onerror = function (message, source, lineno, colno, error) {
+  reportErrorToBackend(message, `Line: ${lineno}:${colno} | ${error ? error.stack : ""}`);
+  return false;
+};
+
+function reportErrorToBackend(msg, detail) {
+  if (!APPS_SCRIPT_URL) return;
+  const userName = sessionStorage.getItem("inu_pos_user_name") || "Guest";
+  fetch(APPS_SCRIPT_URL, {
+    method: "POST",
+    body: JSON.stringify({
+      action: "logError",
+      user: `${userName} (${currentRole || "No Role"})`,
+      message: String(msg),
+      detail: String(detail || "-")
+    }),
+    keepalive: true
+  }).catch(() => {});
+}
 
 function formatRupiah(number) {
   return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(number) || 0);
@@ -828,7 +937,7 @@ async function handleAppLogin() {
         if (att && att.attendanceId) {
           sessionStorage.setItem("active_attendance_id", att.attendanceId);
         }
-      }).catch(e => console.log("Absen log error:", e));
+      }).catch(e => reportErrorToBackend("Absen log error", e));
 
       await fetchSalesData();
     } else {
@@ -838,6 +947,7 @@ async function handleAppLogin() {
   } catch (error) {
     errEl.innerText = "Tidak dapat terhubung ke server.";
     errEl.classList.remove("hidden");
+    reportErrorToBackend("Login Connection Error", error);
   }
 }
 
@@ -938,7 +1048,7 @@ function switchRole(role) {
 }
 
 function showAdminSubTab(tabName) {
-  const tabs = ["Analisis", "Pengeluaran", "MasterHpp", "Costing", "Gaji", "Data"];
+  const tabs = ["Analisis", "Pengeluaran", "MasterHpp", "Costing", "Gaji", "Data", "ErrorLog"];
   tabs.forEach(name => {
     const el = document.getElementById(`subTab${name}`);
     const btn = document.getElementById(`tabBtn${name}`);
@@ -946,14 +1056,20 @@ function showAdminSubTab(tabName) {
     if (btn) btn.className = "px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300";
   });
 
-  const map = { analisis: "Analisis", pengeluaran: "Pengeluaran", masterHpp: "MasterHpp", costing: "Costing", gaji: "Gaji", data: "Data" };
+  const map = { analisis: "Analisis", pengeluaran: "Pengeluaran", masterHpp: "MasterHpp", costing: "Costing", gaji: "Gaji", data: "Data", errorLog: "ErrorLog" };
   const selected = map[tabName];
   if (!selected) return;
 
   const selectedEl = document.getElementById(`subTab${selected}`);
   const selectedBtn = document.getElementById(`tabBtn${selected}`);
   if (selectedEl) selectedEl.classList.remove("hidden");
-  if (selectedBtn) selectedBtn.className = "px-4 py-2 rounded-xl text-xs font-bold bg-brand-600 text-white shadow-sm";
+  if (selectedBtn) {
+    if (tabName === "errorLog") {
+      selectedBtn.className = "px-4 py-2 rounded-xl text-xs font-bold bg-red-600 text-white shadow-sm";
+    } else {
+      selectedBtn.className = "px-4 py-2 rounded-xl text-xs font-bold bg-brand-600 text-white shadow-sm";
+    }
+  }
 
   if (tabName === "analisis") renderDashboard();
   if (tabName === "pengeluaran") renderExpenseAnalysis();
@@ -964,6 +1080,9 @@ function showAdminSubTab(tabName) {
     populateEmployeeOptions();
     calculateSalaryFromDates();
     renderSalaryHistoryTable();
+  }
+  if (tabName === "errorLog") {
+    renderErrorLogTable();
   }
 }
 
@@ -1053,7 +1172,7 @@ function openPaymentModal() {
 
   const quick = document.getElementById("quickMoneyButtons");
   const rounded10 = Math.ceil(total / 10000) * 10000;
-  const rounded50 = Math.ceil(total / 33000) * 33000;
+  const rounded50 = Math.ceil(total / 50000) * 50000;
 
   quick.innerHTML = `
     <button onclick="setModalPayAmount(${total})" class="px-2.5 py-1 bg-slate-200 dark:bg-slate-700 text-[11px] font-bold rounded-lg">Uang Pas</button>
@@ -1121,6 +1240,7 @@ async function submitTransaction() {
   } catch (error) {
     console.error(error);
     alert("Terjadi kesalahan jaringan.");
+    reportErrorToBackend("submitTransaction error", error);
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<i class="fa-solid fa-check-circle"></i> Selesaikan Transaksi';
@@ -1281,6 +1401,7 @@ async function saveMasterMaterialsPermanently() {
   } catch (error) {
     console.error(error);
     alert("Terjadi kesalahan jaringan.");
+    reportErrorToBackend("saveMasterMaterials error", error);
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Simpan Master HPP';
@@ -1302,6 +1423,7 @@ async function saveHPPToBackend() {
   } catch (error) {
     console.error(error);
     alert("Terjadi kesalahan jaringan.");
+    reportErrorToBackend("saveHPPToBackend error", error);
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i> Catat Belanja Hari Ini';
@@ -1331,6 +1453,7 @@ async function fetchSalesData() {
     hppHistoryData = data.hppData || [];
     attendanceData = data.absensiData || [];
     salaryHistoryData = data.gajiData || [];
+    errorLogData = data.errorData || [];
 
     materialsData = masterHpp.map(item => {
       const nama = item["Nama Bahan Baku"] || item["Nama Bahan"] || item.nama || item["Bahan"] || item["Nama"] || Object.values(item)[0] || "Bahan";
@@ -1361,8 +1484,10 @@ async function fetchSalesData() {
     populateEmployeeOptions();
     calculateSalaryFromDates();
     renderSalaryHistoryTable();
+    renderErrorLogTable();
   } catch (error) {
     console.error("fetchSalesData error:", error);
+    reportErrorToBackend("fetchSalesData error", error);
   }
 }
 
@@ -1962,6 +2087,7 @@ async function triggerYearlyArchive() {
   } catch (error) {
     console.error(error);
     alert("Terjadi kesalahan jaringan saat melakukan arsip.");
+    reportErrorToBackend("triggerYearlyArchive error", error);
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -2047,21 +2173,12 @@ function onEmployeeNameChange() {
 
 // PERHITUNGAN GAJI OTOMATIS BERBASIS ABSENSI RIIL (HANYA KASIR)
 function calculateSalaryFromDates() {
-  const nameInput = document.getElementById("salEmployeeName");
-  const empName = nameInput ? nameInput.value.trim().toLowerCase() : "";
+  const empName = document.getElementById("salEmployeeName").value.trim().toLowerCase();
   const start = document.getElementById("salStartDate").value;
   const end = document.getElementById("salEndDate").value;
   const dailyRate = Number(document.getElementById("salDailyRate").value) || 0;
   const sickDays = Math.max(0, Number(document.getElementById("salSickDays").value) || 0);
   const deduction = Math.max(0, Number(document.getElementById("salDeduction").value) || 0);
-
-  let totalCalendarDays = 0;
-  if (start && end) {
-    const startDate = new Date(start + "T00:00:00");
-    const endDate = new Date(end + "T00:00:00");
-    const diff = endDate.getTime() - startDate.getTime();
-    if (diff >= 0) totalCalendarDays = Math.floor(diff / (1000 * 60 * 60 * 24)) + 1;
-  }
 
   let actualWorkDays = 0;
   const uniqueDates = new Set();
@@ -2074,7 +2191,6 @@ function calculateSalaryFromDates() {
       const rowRole = String(row["Role"] || row["Akses"] || "").trim().toLowerCase();
       const rowName = String(row["Nama Karyawan"] || row["Nama"] || "").trim().toLowerCase();
 
-      // Abaikan role Admin / Owner
       if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) {
         return; 
       }
@@ -2082,12 +2198,11 @@ function calculateSalaryFromDates() {
       const rawDate = row["Tanggal"] || row["Waktu"] || "";
       const dateObj = parseTransactionDate(rawDate);
 
-      // Cocokkan nama secara akurat (jika nama diisi)
       const isNameMatch = empName === "" || rowName === empName || rowName.includes(empName) || empName.includes(rowName);
 
       if (isNameMatch && dateObj && dateObj >= startDate && dateObj <= endDate) {
         const formattedDate = formatDateInput(dateObj);
-        uniqueDates.add(formattedDate); // Hanya hitung 1 hari x 1 baris
+        uniqueDates.add(formattedDate);
       }
     });
 
@@ -2098,12 +2213,8 @@ function calculateSalaryFromDates() {
   const grossSalary = effectiveWorkDays * dailyRate;
   const netSalary = Math.max(0, grossSalary - deduction);
 
-  // UPDATE TAMPILAN UI
-  document.getElementById("salTotalDaysDisplay").innerText = `${totalCalendarDays} Hari (Kalender)`;
-  document.getElementById("salWorkDaysDisplay").innerText = `${actualWorkDays} Hari Masuk`;
+  document.getElementById("salWorkDaysDisplay").innerText = `${actualWorkDays} Hari Kasir Masuk`;
   document.getElementById("salSickDaysDisplay").innerText = `${sickDays} Hari Sakit/Izin`;
-  
-  // RUMUS PERHITUNGAN MENGGUNAKAN HARI KERJA RIIL (actualWorkDays = 5 Hari)
   document.getElementById("salTotalDisplay").innerText = formatRupiah(netSalary);
   document.getElementById("salDetailFormula").innerText = `(${effectiveWorkDays} hari masuk riil × ${formatRupiah(dailyRate)}) - ${formatRupiah(deduction)}`;
 }
@@ -2181,6 +2292,7 @@ async function saveSalaryToSheet() {
   } catch (error) {
     console.error(error);
     alert("Terjadi kesalahan jaringan.");
+    reportErrorToBackend("saveSalaryToSheet error", error);
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Simpan Rekap Gaji ke Sheet';
@@ -2223,6 +2335,37 @@ function renderSalaryHistoryTable() {
             <i class="fa-solid fa-print"></i> Cetak Slip
           </button>
         </td>
+      </tr>`;
+  });
+}
+
+// RENDERING TABEL LOG ERROR
+function renderErrorLogTable() {
+  const tbody = document.getElementById("errorLogTableBody");
+  if (!tbody) return;
+
+  tbody.innerHTML = "";
+
+  if (!errorLogData || errorLogData.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-slate-400">Tidak ada log error / bug tercatat. Sistem berjalan normal!</td></tr>`;
+    return;
+  }
+
+  const reversed = errorLogData.slice().reverse();
+  reversed.forEach(row => {
+    const errId = row["ID Error"] || row["ID"] || "-";
+    const time = row["Waktu"] || row["Tanggal"] || "-";
+    const user = row["User / Role"] || row["User"] || "-";
+    const msg = row["Pesan Error"] || row["Message"] || "-";
+    const detail = row["Detail / Stack Trace"] || row["Detail"] || "-";
+
+    tbody.innerHTML += `
+      <tr class="border-b border-slate-100 dark:border-slate-800 text-xs">
+        <td class="py-2.5 px-3 font-mono text-[10px] text-red-500 font-bold">${escapeHtml(errId)}</td>
+        <td class="py-2.5 px-3 text-slate-400">${escapeHtml(time)}</td>
+        <td class="py-2.5 px-3 font-semibold">${escapeHtml(user)}</td>
+        <td class="py-2.5 px-3 font-bold text-red-600 dark:text-red-400">${escapeHtml(msg)}</td>
+        <td class="py-2.5 px-3 font-mono text-[10px] text-slate-500 max-w-xs truncate" title="${escapeHtml(detail)}">${escapeHtml(detail)}</td>
       </tr>`;
   });
 }
