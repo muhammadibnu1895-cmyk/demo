@@ -2047,7 +2047,8 @@ function onEmployeeNameChange() {
 
 // PERHITUNGAN GAJI OTOMATIS BERBASIS ABSENSI RIIL (HANYA KASIR)
 function calculateSalaryFromDates() {
-  const empName = document.getElementById("salEmployeeName").value.trim().toLowerCase();
+  const nameInput = document.getElementById("salEmployeeName");
+  const empName = nameInput ? nameInput.value.trim().toLowerCase() : "";
   const start = document.getElementById("salStartDate").value;
   const end = document.getElementById("salEndDate").value;
   const dailyRate = Number(document.getElementById("salDailyRate").value) || 0;
@@ -2065,7 +2066,7 @@ function calculateSalaryFromDates() {
   let actualWorkDays = 0;
   const uniqueDates = new Set();
 
-  if (start && end && attendanceData.length > 0) {
+  if (start && end && attendanceData && attendanceData.length > 0) {
     const startDate = new Date(start + "T00:00:00");
     const endDate = new Date(end + "T23:59:59");
 
@@ -2073,6 +2074,7 @@ function calculateSalaryFromDates() {
       const rowRole = String(row["Role"] || row["Akses"] || "").trim().toLowerCase();
       const rowName = String(row["Nama Karyawan"] || row["Nama"] || "").trim().toLowerCase();
 
+      // Abaikan role Admin / Owner
       if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) {
         return; 
       }
@@ -2080,11 +2082,12 @@ function calculateSalaryFromDates() {
       const rawDate = row["Tanggal"] || row["Waktu"] || "";
       const dateObj = parseTransactionDate(rawDate);
 
-      if (rowName.includes(empName) || empName.includes(rowName) || empName === "" || empName.includes("kasir")) {
-        if (dateObj && dateObj >= startDate && dateObj <= endDate) {
-          const formattedDate = formatDateInput(dateObj);
-          uniqueDates.add(formattedDate);
-        }
+      // Cocokkan nama secara akurat (jika nama diisi)
+      const isNameMatch = empName === "" || rowName === empName || rowName.includes(empName) || empName.includes(rowName);
+
+      if (isNameMatch && dateObj && dateObj >= startDate && dateObj <= endDate) {
+        const formattedDate = formatDateInput(dateObj);
+        uniqueDates.add(formattedDate); // Hanya hitung 1 hari x 1 baris
       }
     });
 
@@ -2095,11 +2098,14 @@ function calculateSalaryFromDates() {
   const grossSalary = effectiveWorkDays * dailyRate;
   const netSalary = Math.max(0, grossSalary - deduction);
 
+  // UPDATE TAMPILAN UI
   document.getElementById("salTotalDaysDisplay").innerText = `${totalCalendarDays} Hari (Kalender)`;
-  document.getElementById("salWorkDaysDisplay").innerText = `${actualWorkDays} Hari Kasir Masuk`;
+  document.getElementById("salWorkDaysDisplay").innerText = `${actualWorkDays} Hari Masuk`;
   document.getElementById("salSickDaysDisplay").innerText = `${sickDays} Hari Sakit/Izin`;
+  
+  // RUMUS PERHITUNGAN MENGGUNAKAN HARI KERJA RIIL (actualWorkDays = 5 Hari)
   document.getElementById("salTotalDisplay").innerText = formatRupiah(netSalary);
-  document.getElementById("salDetailFormula").innerText = `(${effectiveWorkDays} hari kerja riil × ${formatRupiah(dailyRate)}) - ${formatRupiah(deduction)}`;
+  document.getElementById("salDetailFormula").innerText = `(${effectiveWorkDays} hari masuk riil × ${formatRupiah(dailyRate)}) - ${formatRupiah(deduction)}`;
 }
 
 // FUNGSI MENYIMPAN REKAP GAJI KE GOOGLE SHEETS
