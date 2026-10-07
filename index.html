@@ -286,7 +286,7 @@
         <button id="tabBtnPengeluaran" onclick="showAdminSubTab('pengeluaran')" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"><i class="fa-solid fa-chart-pie"></i> Analisis Pengeluaran</button>
         <button id="tabBtnMasterHpp" onclick="showAdminSubTab('masterHpp')" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"><i class="fa-solid fa-database"></i> Master HPP</button>
         <button id="tabBtnCosting" onclick="showAdminSubTab('costing')" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"><i class="fa-solid fa-receipt"></i> HPP</button>
-        <button id="tabBtnGaji" onclick="showAdminSubTab('gaji')" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"><i class="fa-solid fa-calculator"></i> Hitung Gaji</button>
+        <button id="tabBtnGaji" onclick="showAdminSubTab('gaji')" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"><i class="fa-solid fa-file-invoice-dollar"></i> Data Gaji</button>
         <button id="tabBtnData" onclick="showAdminSubTab('data')" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"><i class="fa-solid fa-database"></i> Data Transaksi</button>
       </div>
 
@@ -325,7 +325,6 @@
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <!-- GRAFIK 1: TREN PENJUALAN PER PERIODE WAKTU -->
           <div class="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col justify-between">
             <div>
               <h3 class="text-xs font-bold uppercase tracking-wider text-slate-500 text-center mb-4" id="trendChartTitle">TREN PENJUALAN PER WAKTU</h3>
@@ -348,7 +347,6 @@
             </div>
           </div>
 
-          <!-- GRAFIK 2: MENU TERLARIS BERDASARKAN PERIODE -->
           <div class="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col justify-between">
             <div>
               <h3 class="text-xs font-bold uppercase tracking-wider text-slate-500 text-center mb-4">INFORMASI PENJUALAN TERLARIS</h3>
@@ -501,12 +499,18 @@
         </section>
       </div>
 
-      <!-- GAJI -->
-      <div id="subTabGaji" class="hidden space-y-4">
+      <!-- TAB GAJI KARYAWAN (KALKULATOR + TABEL RIWAYAT DARI SHEET) -->
+      <div id="subTabGaji" class="hidden space-y-6">
+        <!-- FORM KALKULATOR GAJI -->
         <section class="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm space-y-4">
-          <div class="border-b border-slate-100 dark:border-slate-800 pb-3">
-            <h3 class="text-base font-bold"><i class="fa-solid fa-calculator text-brand-600"></i> Hitung Gaji Karyawan</h3>
-            <p class="text-xs text-slate-400">Gaji dihitung otomatis berdasarkan kehadiran riil role Kasir dari Sheet Absensi (Owner/Admin tidak dihitung).</p>
+          <div class="border-b border-slate-100 dark:border-slate-800 pb-3 flex flex-wrap justify-between items-center gap-2">
+            <div>
+              <h3 class="text-base font-bold"><i class="fa-solid fa-calculator text-brand-600"></i> Hitung Gaji Karyawan</h3>
+              <p class="text-xs text-slate-400">Gaji dihitung otomatis dari kehadiran Kasir di Sheet Absensi.</p>
+            </div>
+            <button onclick="saveSalaryToSheet()" id="btnSaveSalary" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-md transition flex items-center gap-2">
+              <i class="fa-solid fa-floppy-disk"></i> Simpan Rekap Gaji ke Sheet
+            </button>
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
@@ -552,13 +556,40 @@
 
           <div class="bg-brand-50 dark:bg-brand-950/40 p-4 rounded-2xl border border-brand-200 dark:border-brand-900/50 flex flex-wrap justify-between items-center gap-3">
             <div>
-              <p class="text-xs uppercase font-bold text-brand-600">Total Gaji Bersih</p>
+              <p class="text-xs uppercase font-bold text-brand-600">Total Gaji Bersih Hari Ini</p>
               <p id="salTotalDisplay" class="text-2xl font-black text-brand-700">Rp 0</p>
               <p id="salDetailFormula" class="text-[11px] text-slate-500">-</p>
             </div>
             <button onclick="printSalarySlip()" class="px-4 py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-xs font-bold shadow-md">
               <i class="fa-solid fa-print"></i> Cetak Slip Gaji
             </button>
+          </div>
+        </section>
+
+        <!-- TABEL RIWAYAT DATA GAJI DARI GOOGLE SHEETS -->
+        <section class="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm space-y-4">
+          <div class="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-3">
+            <h3 class="text-base font-bold"><i class="fa-solid fa-file-invoice-dollar text-emerald-600"></i> Riwayat Pembayaran Gaji Karyawan</h3>
+            <button onclick="fetchSalesData()" class="px-3 py-1 bg-slate-100 dark:bg-slate-800 text-xs font-bold rounded-lg hover:bg-slate-200 transition">
+              <i class="fa-solid fa-rotate"></i> Refresh Data
+            </button>
+          </div>
+          <div class="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
+            <table class="w-full text-xs text-left">
+              <thead class="bg-slate-50 dark:bg-slate-800">
+                <tr>
+                  <th class="py-3 px-3">ID Gaji</th>
+                  <th class="py-3 px-3">Tgl Pembayaran</th>
+                  <th class="py-3 px-3">Nama Karyawan</th>
+                  <th class="py-3 px-3">Periode</th>
+                  <th class="py-3 px-3 text-center">Hari Kerja</th>
+                  <th class="py-3 px-3 text-right">Potongan</th>
+                  <th class="py-3 px-3 text-right">Gaji Bersih</th>
+                  <th class="py-3 px-3 text-center">Aksi</th>
+                </tr>
+              </thead>
+              <tbody id="salaryHistoryTableBody"></tbody>
+            </table>
           </div>
         </section>
       </div>
@@ -680,6 +711,7 @@ let materialsData = [];
 let dailyMaterialsData = [];
 let hppHistoryData = [];
 let attendanceData = [];
+let salaryHistoryData = [];
 
 let activeFilter = "today";
 let activeExpenseFilter = "today";
@@ -932,6 +964,7 @@ function showAdminSubTab(tabName) {
   }
   if (tabName === "gaji") {
     calculateSalaryFromDates();
+    renderSalaryHistoryTable();
   }
 }
 
@@ -1298,6 +1331,7 @@ async function fetchSalesData() {
     const masterHpp = data.masterHpp || [];
     hppHistoryData = data.hppData || [];
     attendanceData = data.absensiData || [];
+    salaryHistoryData = data.gajiData || []; // Menyimpan data riwayat gaji dari sheet
 
     materialsData = masterHpp.map(item => {
       const nama = item["Nama Bahan Baku"] || item["Nama Bahan"] || item.nama || item["Bahan"] || item["Nama"] || Object.values(item)[0] || "Bahan";
@@ -1326,6 +1360,7 @@ async function fetchSalesData() {
     renderDashboard();
     renderExpenseAnalysis();
     calculateSalaryFromDates();
+    renderSalaryHistoryTable();
   } catch (error) {
     console.error("fetchSalesData error:", error);
   }
@@ -1660,7 +1695,6 @@ function renderDashboard() {
   renderTable(salesData);
 }
 
-// LOGIKA TREN WAKTU PERIODE UNTUK GRAFIK KIRI & PERINGKAT TERLARIS BERDASARKAN FILTER
 function renderCharts(productSummary, filteredData) {
   const barCanvas = document.getElementById("productBarChart");
   const topSalesCanvas = document.getElementById("topSalesBarChart");
@@ -1669,7 +1703,6 @@ function renderCharts(productSummary, filteredData) {
   if (barChartInstance) barChartInstance.destroy();
   if (topSalesChartInstance) topSalesChartInstance.destroy();
 
-  // 1. GRAFIK KIRI: AGREGASI TREN BERDASARKAN FILTER (HARI INI / PER HARI / PER MINGGU / PER BULAN)
   let timeLabels = [];
   let timeOmsetValues = [];
   let timeQtyValues = [];
@@ -1779,7 +1812,6 @@ function renderCharts(productSummary, filteredData) {
     trQty.innerHTML += `<td class="p-2 font-black text-blue-600 dark:text-blue-400 border-l border-slate-200 dark:border-slate-700">${timeQtyValues[idx] || 0}</td>`;
   });
 
-  // 2. GRAFIK KANAN: INFORMASI PENJUALAN TERLARIS (PERIODE AKTIF)
   const products = Object.keys(productSummary);
   const sortedProducts = products.slice().sort((a, b) => (productSummary[b].qty || 0) - (productSummary[a].qty || 0));
   const topOmsetValues = sortedProducts.map(p => productSummary[p].omset);
@@ -1966,7 +1998,6 @@ function calculateSalaryFromDates() {
       const rowRole = String(row["Role"] || row["Akses"] || "").trim().toLowerCase();
       const rowName = String(row["Nama Karyawan"] || row["Nama"] || "").trim().toLowerCase();
 
-      // HANYA MENGHITUNG DARI LOG KASIR (MENGABAIKAN OWNER / ADMIN)
       if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) {
         return; 
       }
@@ -1996,6 +2027,140 @@ function calculateSalaryFromDates() {
   document.getElementById("salDetailFormula").innerText = `(${effectiveWorkDays} hari kerja riil × ${formatRupiah(dailyRate)}) - ${formatRupiah(deduction)}`;
 }
 
+// FUNGSI MENYIMPAN REKAP GAJI KE GOOGLE SHEETS
+async function saveSalaryToSheet() {
+  const name = document.getElementById("salEmployeeName").value;
+  const start = document.getElementById("salStartDate").value;
+  const end = document.getElementById("salEndDate").value;
+  const dailyRate = Number(document.getElementById("salDailyRate").value) || 0;
+  const sickDays = Number(document.getElementById("salSickDays").value) || 0;
+  const deduction = Number(document.getElementById("salDeduction").value) || 0;
+
+  function displayDate(value) {
+    if (!value) return "-";
+    const [y,m,d] = value.split("-");
+    return `${d}/${m}/${y}`;
+  }
+
+  let actualWorkDays = 0;
+  const uniqueDates = new Set();
+  if (start && end && attendanceData.length > 0) {
+    const startDate = new Date(start + "T00:00:00");
+    const endDate = new Date(end + "T23:59:59");
+    const empName = name.trim().toLowerCase();
+
+    attendanceData.forEach(row => {
+      const rowRole = String(row["Role"] || row["Akses"] || "").trim().toLowerCase();
+      const rowName = String(row["Nama Karyawan"] || row["Nama"] || "").trim().toLowerCase();
+
+      if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) return;
+
+      const rawDate = row["Tanggal"] || row["Waktu"] || "";
+      const dateObj = parseTransactionDate(rawDate);
+
+      if (rowName.includes(empName) || empName.includes(rowName) || empName === "" || empName.includes("kasir")) {
+        if (dateObj && dateObj >= startDate && dateObj <= endDate) {
+          uniqueDates.add(formatDateInput(dateObj));
+        }
+      }
+    });
+
+    actualWorkDays = uniqueDates.size;
+  }
+
+  const effective = Math.max(0, actualWorkDays - sickDays);
+  const gross = effective * dailyRate;
+  const net = Math.max(0, gross - deduction);
+  const periodStr = `${displayDate(start)} - ${displayDate(end)}`;
+
+  if (!confirm(`Simpan rekap gaji untuk ${name} periode ${periodStr} dengan Total Bersih ${formatRupiah(net)} ke Google Sheets?`)) return;
+
+  const btn = document.getElementById("btnSaveSalary");
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
+
+  try {
+    const payload = {
+      action: "saveSalary",
+      employeeName: name,
+      period: periodStr,
+      workDays: effective,
+      deduction: deduction,
+      netSalary: net,
+      notes: `Gaji Pokok: ${formatRupiah(gross)} (${effective} Hari)`
+    };
+
+    const response = await fetch(APPS_SCRIPT_URL, { method: "POST", body: JSON.stringify(payload) });
+    const res = await response.json();
+
+    if (res.status === "success") {
+      alert("Rekap gaji berhasil disimpan!");
+      await fetchSalesData();
+    } else { alert("Gagal menyimpan rekap gaji: " + res.message); }
+  } catch (error) {
+    console.error(error);
+    alert("Terjadi kesalahan jaringan.");
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Simpan Rekap Gaji ke Sheet';
+  }
+}
+
+// RENDERING TABEL RIWAYAT DATA GAJI DARI SHEET
+function renderSalaryHistoryTable() {
+  const tbody = document.getElementById("salaryHistoryTableBody");
+  if (!tbody) return;
+
+  tbody.innerHTML = "";
+
+  if (!salaryHistoryData || salaryHistoryData.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" class="text-center py-4 text-slate-400">Belum ada riwayat penggajian tersimpan.</td></tr>`;
+    return;
+  }
+
+  const reversed = salaryHistoryData.slice().reverse();
+  reversed.forEach(row => {
+    const salId = row["ID Gaji"] || row["ID"] || "-";
+    const payDate = row["Tanggal Bayar"] || row["Tgl Pembayaran"] || row["Tanggal"] || "-";
+    const empName = row["Nama Karyawan"] || row["Nama"] || "-";
+    const period = row["Periode"] || "-";
+    const workDays = row["Hari Kerja"] || 0;
+    const deduction = parseDecimal(row["Kasbon/Potongan"] || row["Potongan"]);
+    const netSalary = parseDecimal(row["Gaji Bersih"] || row["Total Gaji"] || row["Total"]);
+
+    tbody.innerHTML += `
+      <tr class="border-b border-slate-100 dark:border-slate-800">
+        <td class="py-2.5 px-3 font-mono text-[11px]">${escapeHtml(salId)}</td>
+        <td class="py-2.5 px-3 text-slate-500">${escapeHtml(payDate)}</td>
+        <td class="py-2.5 px-3 font-bold text-slate-800 dark:text-slate-200">${escapeHtml(empName)}</td>
+        <td class="py-2.5 px-3">${escapeHtml(period)}</td>
+        <td class="py-2.5 px-3 text-center font-bold text-blue-600">${workDays} Hari</td>
+        <td class="py-2.5 px-3 text-right text-red-500">${formatRupiah(deduction)}</td>
+        <td class="py-2.5 px-3 text-right font-black text-emerald-600">${formatRupiah(netSalary)}</td>
+        <td class="py-2.5 px-3 text-center">
+          <button onclick="printSalarySlipFromRow('${escapeHtml(empName)}', '${escapeHtml(period)}', ${workDays}, ${deduction}, ${netSalary})" class="px-2 py-1 bg-brand-600 hover:bg-brand-700 text-white rounded text-[10px] font-bold">
+            <i class="fa-solid fa-print"></i> Cetak Slip
+          </button>
+        </td>
+      </tr>`;
+  });
+}
+
+function printSalarySlipFromRow(name, period, workDays, deduction, netSalary) {
+  const gross = netSalary + deduction;
+
+  document.getElementById("printName").innerText = name;
+  document.getElementById("printSignEmp").innerText = `( ${name} )`;
+  document.getElementById("printPeriod").innerText = period;
+  document.getElementById("printSickDaysText").innerText = "0 Hari";
+  document.getElementById("printDate").innerText = new Date().toLocaleString("id-ID");
+  document.getElementById("printBase").innerText = `${formatRupiah(gross)} (${workDays} Hari Kerja)`;
+  document.getElementById("printDeduction").innerText = `- ${formatRupiah(deduction)}`;
+  document.getElementById("printTotal").innerText = formatRupiah(netSalary);
+
+  window.print();
+}
+
 function printSalarySlip() {
   calculateSalaryFromDates();
   const name = document.getElementById("salEmployeeName").value;
@@ -2004,14 +2169,6 @@ function printSalarySlip() {
   const dailyRate = Number(document.getElementById("salDailyRate").value) || 0;
   const sickDays = Number(document.getElementById("salSickDays").value) || 0;
   const deduction = Number(document.getElementById("salDeduction").value) || 0;
-
-  let totalCalendarDays = 0;
-  if (start && end) {
-    const startDate = new Date(start + "T00:00:00");
-    const endDate = new Date(end + "T00:00:00");
-    const diff = endDate.getTime() - startDate.getTime();
-    if (diff >= 0) totalCalendarDays = Math.floor(diff / (1000 * 60 * 60 * 24)) + 1;
-  }
 
   let actualWorkDays = 0;
   const uniqueDates = new Set();
@@ -2025,9 +2182,7 @@ function printSalarySlip() {
       const rowRole = String(row["Role"] || row["Akses"] || "").trim().toLowerCase();
       const rowName = String(row["Nama Karyawan"] || row["Nama"] || "").trim().toLowerCase();
 
-      if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) {
-        return;
-      }
+      if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) return;
 
       const rawDate = row["Tanggal"] || row["Waktu"] || "";
       const dateObj = parseTransactionDate(rawDate);
