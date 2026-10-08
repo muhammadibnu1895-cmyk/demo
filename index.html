@@ -1624,40 +1624,37 @@ function getRowDateString(row) {
   return row["Tanggal & Waktu"] || row["Waktu"] || row["Tanggal"] || row["Date"] || row["Timestamp"] || Object.values(row)[1] || "";
 }
 
+// FUNGSI PARSE TANGGAL ANTI-FAIL (Bisa baca DD/MM/YYYY, YYYY-MM-DD, atau Object Date)
 function parseTransactionDate(value) {
   if (!value) return null;
   if (value instanceof Date) return value;
-  const parsedDirect = new Date(value);
-  if (!isNaN(parsedDirect.getTime())) return parsedDirect;
 
   const str = String(value).trim();
-  if (str.includes("/")) {
+  
+  // Format DD/MM/YYYY atau DD-MM-YYYY
+  if (str.includes("/") || str.includes("-")) {
     const spaceParts = str.split(" ");
-    const dParts = spaceParts[0].split("/");
+    const delimiter = str.includes("/") ? "/" : "-";
+    const dParts = spaceParts[0].split(delimiter);
+
     if (dParts.length === 3) {
-      let p1 = parseInt(dParts[0], 10), p2 = parseInt(dParts[1], 10), p3 = parseInt(dParts[2], 10);
-      let year = p1 > 1000 ? p1 : (p3 > 1000 ? p3 : 2000 + p3);
-      let month = p2 - 1;
-      let day = p1 > 1000 ? p3 : p1;
-      let hour = 0, min = 0, sec = 0;
-      if (spaceParts[1]) {
-        const tParts = spaceParts[1].split(":");
-        hour = parseInt(tParts[0], 10) || 0;
-        min = parseInt(tParts[1], 10) || 0;
-        sec = parseInt(tParts[2], 10) || 0;
+      let p1 = parseInt(dParts[0], 10);
+      let p2 = parseInt(dParts[1], 10);
+      let p3 = parseInt(dParts[2], 10);
+
+      // Jika p1 adalah Tahun (YYYY-MM-DD)
+      if (p1 > 1000) {
+        return new Date(p1, p2 - 1, p3);
       }
-      return new Date(year, month, day, hour, min, sec);
+      // Jika p3 adalah Tahun (DD/MM/YYYY)
+      if (p3 > 1000) {
+        return new Date(p3, p2 - 1, p1);
+      }
     }
   }
-  if (str.includes("-")) {
-    const spaceParts = str.split(" ");
-    const dParts = spaceParts[0].split("-");
-    if (dParts.length === 3) {
-      let p1 = parseInt(dParts[0], 10), p2 = parseInt(dParts[1], 10), p3 = parseInt(dParts[2], 10);
-      return new Date(p1 > 1000 ? p1 : p3, p2 - 1, p1 > 1000 ? p3 : p1);
-    }
-  }
-  return null;
+
+  const parsedDirect = new Date(value);
+  return isNaN(parsedDirect.getTime()) ? null : parsedDirect;
 }
 
 function setDashboardFilter(filter) {
@@ -2113,7 +2110,7 @@ function onEmployeeNameChange() {
   calculateSalaryFromDates();
 }
 
-// PERHITUNGAN GAJI OTOMATIS BERBASIS ABSENSI RIIL (AKURAT DARI SHEET)
+// PERHITUNGAN GAJI PRESISI MURNI DARI RECORD SHEET ABSENSI
 function calculateSalaryFromDates() {
   const nameInput = document.getElementById("salEmployeeName");
   const empName = nameInput ? nameInput.value.trim().toLowerCase() : "";
@@ -2131,37 +2128,44 @@ function calculateSalaryFromDates() {
     const endDate = new Date(end + "T23:59:59");
 
     attendanceData.forEach(row => {
-      const rowRole = String(row["Role"] || row["Akses"] || "").trim().toLowerCase();
-      const rowName = String(row["Nama Karyawan"] || row["Nama"] || "").trim().toLowerCase();
+      // Ambil nama dari berbagai kemungkinan nama kolom header
+      const rowName = String(
+        row["Nama Karyawan"] || row["Nama"] || row["Karyawan"] || Object.values(row)[2] || ""
+      ).trim().toLowerCase();
 
-      // 1. Filter: Abaikan role Admin / Owner
+      const rowRole = String(
+        row["Role"] || row["Akses"] || Object.values(row)[3] || ""
+      ).trim().toLowerCase();
+
+      // 1. ABAIKAN JIKA ROLE OWNER / ADMIN
       if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) {
-        return; 
+        return;
       }
 
-      // 2. Filter: Cocokkan nama karyawan secara akurat
-      const isNameMatch = (empName !== "" && (rowName === empName || rowName.includes(empName)));
+      // 2. COCOKKAN NAMA KARYAWAN secara ketat
+      const isMatch = empName !== "" && (rowName === empName || rowName.includes(empName) || empName.includes(rowName));
 
-      if (isNameMatch) {
-        const rawDate = row["Tanggal"] || row["Waktu"] || "";
+      if (isMatch) {
+        const rawDate = row["Tanggal"] || row["Waktu"] || Object.values(row)[1] || "";
         const dateObj = parseTransactionDate(rawDate);
 
-        // 3. Filter: Tanggal harus dalam rentang Tanggal Mulai s/d Tanggal Selesai
+        // 3. CEK RENTANG TANGGAL
         if (dateObj && dateObj >= startDate && dateObj <= endDate) {
-          const formattedDate = formatDateInput(dateObj);
-          uniqueDates.add(formattedDate); // Simpan tanggal unik saja
+          // Buat format kunci unik YYYY-MM-DD
+          const dateKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
+          uniqueDates.add(dateKey); // Set otomatis mencegah tanggal ganda dihitung 2x
         }
       }
     });
 
-    actualWorkDays = uniqueDates.size; // Jumlah hari hadir riil yang sebenarnya
+    actualWorkDays = uniqueDates.size; // Jumlah HARI UNIK MASUK
   }
 
   const effectiveWorkDays = Math.max(0, actualWorkDays - sickDays);
   const grossSalary = effectiveWorkDays * dailyRate;
   const netSalary = Math.max(0, grossSalary - deduction);
 
-  // Update Tampilan UI
+  // UPDATE LAYAR
   const displayWorkDaysEl = document.getElementById("salWorkDaysDisplay");
   if (displayWorkDaysEl) displayWorkDaysEl.innerText = `${actualWorkDays} Hari Kasir Masuk`;
 
