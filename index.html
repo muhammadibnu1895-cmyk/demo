@@ -2082,12 +2082,16 @@ function onEmployeeNameChange() {
 
   if (attendanceData && attendanceData.length > 0) {
     attendanceData.forEach(row => {
-      const rowRole = String(row["Role"] || row["Akses"] || "").toLowerCase();
+      const rowRole = String(row["Role"] || row["Akses"] || "").toLowerCase().trim();
       const rowName = String(row["Nama Karyawan"] || row["Nama"] || "").trim().toLowerCase();
 
+      // Abaikan Admin / Owner
       if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) return;
 
-      if (rowName.includes(empName) || empName.includes(rowName) || empName === "") {
+      // Pencocokan nama yang presisi
+      const isMatch = (empName !== "" && (rowName === empName || rowName.includes(empName)));
+
+      if (isMatch) {
         const rawDate = row["Tanggal"] || row["Waktu"] || "";
         const dateObj = parseTransactionDate(rawDate);
 
@@ -2109,9 +2113,10 @@ function onEmployeeNameChange() {
   calculateSalaryFromDates();
 }
 
-// PERHITUNGAN GAJI OTOMATIS BERBASIS ABSENSI RIIL (HANYA KASIR)
+// PERHITUNGAN GAJI OTOMATIS BERBASIS ABSENSI RIIL (AKURAT DARI SHEET)
 function calculateSalaryFromDates() {
-  const empName = document.getElementById("salEmployeeName").value.trim().toLowerCase();
+  const nameInput = document.getElementById("salEmployeeName");
+  const empName = nameInput ? nameInput.value.trim().toLowerCase() : "";
   const start = document.getElementById("salStartDate").value;
   const end = document.getElementById("salEndDate").value;
   const dailyRate = Number(document.getElementById("salDailyRate").value) || 0;
@@ -2129,32 +2134,45 @@ function calculateSalaryFromDates() {
       const rowRole = String(row["Role"] || row["Akses"] || "").trim().toLowerCase();
       const rowName = String(row["Nama Karyawan"] || row["Nama"] || "").trim().toLowerCase();
 
+      // 1. Filter: Abaikan role Admin / Owner
       if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) {
         return; 
       }
 
-      const rawDate = row["Tanggal"] || row["Waktu"] || "";
-      const dateObj = parseTransactionDate(rawDate);
+      // 2. Filter: Cocokkan nama karyawan secara akurat
+      const isNameMatch = (empName !== "" && (rowName === empName || rowName.includes(empName)));
 
-      const isNameMatch = empName === "" || rowName === empName || rowName.includes(empName) || empName.includes(rowName);
+      if (isNameMatch) {
+        const rawDate = row["Tanggal"] || row["Waktu"] || "";
+        const dateObj = parseTransactionDate(rawDate);
 
-      if (isNameMatch && dateObj && dateObj >= startDate && dateObj <= endDate) {
-        const formattedDate = formatDateInput(dateObj);
-        uniqueDates.add(formattedDate);
+        // 3. Filter: Tanggal harus dalam rentang Tanggal Mulai s/d Tanggal Selesai
+        if (dateObj && dateObj >= startDate && dateObj <= endDate) {
+          const formattedDate = formatDateInput(dateObj);
+          uniqueDates.add(formattedDate); // Simpan tanggal unik saja
+        }
       }
     });
 
-    actualWorkDays = uniqueDates.size;
+    actualWorkDays = uniqueDates.size; // Jumlah hari hadir riil yang sebenarnya
   }
 
   const effectiveWorkDays = Math.max(0, actualWorkDays - sickDays);
   const grossSalary = effectiveWorkDays * dailyRate;
   const netSalary = Math.max(0, grossSalary - deduction);
 
-  document.getElementById("salWorkDaysDisplay").innerText = `${actualWorkDays} Hari Kasir Masuk`;
-  document.getElementById("salSickDaysDisplay").innerText = `${sickDays} Hari Sakit/Izin`;
-  document.getElementById("salTotalDisplay").innerText = formatRupiah(netSalary);
-  document.getElementById("salDetailFormula").innerText = `(${effectiveWorkDays} hari masuk riil × ${formatRupiah(dailyRate)}) - ${formatRupiah(deduction)}`;
+  // Update Tampilan UI
+  const displayWorkDaysEl = document.getElementById("salWorkDaysDisplay");
+  if (displayWorkDaysEl) displayWorkDaysEl.innerText = `${actualWorkDays} Hari Kasir Masuk`;
+
+  const displaySickEl = document.getElementById("salSickDaysDisplay");
+  if (displaySickEl) displaySickEl.innerText = `${sickDays} Hari Sakit/Izin`;
+
+  const displayTotalEl = document.getElementById("salTotalDisplay");
+  if (displayTotalEl) displayTotalEl.innerText = formatRupiah(netSalary);
+
+  const displayFormulaEl = document.getElementById("salDetailFormula");
+  if (displayFormulaEl) displayFormulaEl.innerText = `(${effectiveWorkDays} hari masuk riil × ${formatRupiah(dailyRate)}) - ${formatRupiah(deduction)}`;
 }
 
 // FUNGSI MENYIMPAN REKAP GAJI KE GOOGLE SHEETS
