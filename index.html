@@ -2110,7 +2110,6 @@ function onEmployeeNameChange() {
   calculateSalaryFromDates();
 }
 
-// PERHITUNGAN GAJI PRESISI MURNI DARI RECORD SHEET ABSENSI
 function calculateSalaryFromDates() {
   const nameInput = document.getElementById("salEmployeeName");
   const empName = nameInput ? nameInput.value.trim().toLowerCase() : "";
@@ -2123,49 +2122,60 @@ function calculateSalaryFromDates() {
   let actualWorkDays = 0;
   const uniqueDates = new Set();
 
+  console.log("=== PERHITUNGAN GAJI DEBUG ===");
+  console.log("Target Nama Karyawan:", empName);
+  console.log("Total Data Absensi Terunduh:", attendanceData.length);
+
   if (start && end && attendanceData && attendanceData.length > 0) {
     const startDate = new Date(start + "T00:00:00");
     const endDate = new Date(end + "T23:59:59");
 
-    attendanceData.forEach(row => {
-      // Ambil nama dari berbagai kemungkinan nama kolom header
+    attendanceData.forEach((row, idx) => {
+      // 1. Ekstrak Nama dari berbagai variasi header kolom
       const rowName = String(
-        row["Nama Karyawan"] || row["Nama"] || row["Karyawan"] || Object.values(row)[2] || ""
+        row["Nama Karyawan"] || row["Nama"] || row["Karyawan"] || row["employeeName"] || Object.values(row)[2] || ""
       ).trim().toLowerCase();
 
+      // 2. Ekstrak Role
       const rowRole = String(
-        row["Role"] || row["Akses"] || Object.values(row)[3] || ""
+        row["Role"] || row["Akses"] || row["role"] || Object.values(row)[3] || ""
       ).trim().toLowerCase();
 
-      // 1. ABAIKAN JIKA ROLE OWNER / ADMIN
+      // Abaikan Owner / Admin
       if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) {
         return;
       }
 
-      // 2. COCOKKAN NAMA KARYAWAN secara ketat
-      const isMatch = empName !== "" && (rowName === empName || rowName.includes(empName) || empName.includes(rowName));
+      // 3. Pencocokan Nama Ketat
+      // Jika input nama diisi, maka HARUS COCOK DENGAN NAMA DI ROW
+      if (!empName || empName === "kasir shift" || empName === "kasir") {
+        // Jika nama yang diketik masih default / umum, filter diabaikan agar menghitung semua kasir
+      } else if (rowName !== empName && !rowName.includes(empName)) {
+        return; // Lewati jika nama tidak cocok
+      }
 
-      if (isMatch) {
-        const rawDate = row["Tanggal"] || row["Waktu"] || Object.values(row)[1] || "";
-        const dateObj = parseTransactionDate(rawDate);
+      // 4. Ekstrak Tanggal
+      const rawDate = row["Tanggal"] || row["Waktu"] || Object.values(row)[1] || "";
+      const dateObj = parseTransactionDate(rawDate);
 
-        // 3. CEK RENTANG TANGGAL
-        if (dateObj && dateObj >= startDate && dateObj <= endDate) {
-          // Buat format kunci unik YYYY-MM-DD
-          const dateKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
-          uniqueDates.add(dateKey); // Set otomatis mencegah tanggal ganda dihitung 2x
-        }
+      if (dateObj && dateObj >= startDate && dateObj <= endDate) {
+        const dateKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
+        uniqueDates.add(dateKey);
+        console.log(`[Baris ${idx+1}] Lolos Filter -> Tanggal: ${dateKey} | Nama: ${rowName}`);
       }
     });
 
-    actualWorkDays = uniqueDates.size; // Jumlah HARI UNIK MASUK
+    actualWorkDays = uniqueDates.size;
   }
+
+  console.log("Hasil Tanggal Unik Yang Dihitung:", Array.from(uniqueDates));
+  console.log("Total Hari Masuk Riil:", actualWorkDays);
 
   const effectiveWorkDays = Math.max(0, actualWorkDays - sickDays);
   const grossSalary = effectiveWorkDays * dailyRate;
   const netSalary = Math.max(0, grossSalary - deduction);
 
-  // UPDATE LAYAR
+  // Update Layar
   const displayWorkDaysEl = document.getElementById("salWorkDaysDisplay");
   if (displayWorkDaysEl) displayWorkDaysEl.innerText = `${actualWorkDays} Hari Kasir Masuk`;
 
