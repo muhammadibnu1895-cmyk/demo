@@ -76,9 +76,9 @@
     }
   </style>
 
-  <!-- JAVASCRIPT GLOBAL & UTAMA DIPINDAHKAN KE HEAD -->
+  <!-- SCRIPT UTAMA PERTAMA (FUNGSI UTAMA & PEMBANTU DEKLARASI DUA) -->
   <script>
-    const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzOEF-gxRjI061DUiZ2eAQR6iVSfIO0JRs-Oo7YLTkzH07H8SfgMfAexbstCd6bdMSfZQ/exec";
+    const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxqnpjgoLlPVZDSjvAy5Amy0YZl1Vf9AG9wwxPqsXjut1i96DzUqySM3OrBIPEhQDvwUQ/exec";
 
     let cart = [];
     let salesData = [];
@@ -99,7 +99,7 @@
     let expenseChartInstance = null;
 
     window.onerror = function (message, source, lineno, colno, error) {
-      reportErrorToBackend(message, `Line: ${lineno}:${colno} \vert{}${error ? error.stack : ""}`);
+      reportErrorToBackend(message, `Line: ${lineno}:${colno} | ${error ? error.stack : ""}`);
       return false;
     };
 
@@ -133,6 +133,151 @@
       return parseFloat(str) || 0;
     }
 
+    function getNumericValue(value) {
+      if (typeof value === "number") return value;
+      if (value === null || value === undefined) return 0;
+      return Number(String(value).replace(/[^0-9-]/g, "")) || 0;
+    }
+
+    function formatDateInput(date) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const d = String(date.getDate()).padStart(2, "0");
+      return `${y}-${m}-${d}`;
+    }
+
+    // PARSE TANGGAL & JAM AKURAT ANTI-00:00:00
+    function parseTransactionDate(value) {
+      if (!value) return null;
+      if (value instanceof Date) return value;
+
+      let str = String(value).trim().replace(/'/g, "");
+      str = str.replace(/(\d{2})\.(\d{2})\.(\d{2})/, "$1:$2:$3");
+
+      if (str.includes("/") || str.includes("-")) {
+        const spaceParts = str.split(" ");
+        const delimiter = str.includes("/") ? "/" : "-";
+        const dateParts = spaceParts[0].replace(",", "").split(delimiter);
+
+        let hour = 0, min = 0, sec = 0;
+        if (spaceParts[1]) {
+          const timeParts = spaceParts[1].split(":");
+          hour = parseInt(timeParts[0], 10) || 0;
+          min = parseInt(timeParts[1], 10) || 0;
+          sec = parseInt(timeParts[2], 10) || 0;
+        }
+
+        if (dateParts.length === 3) {
+          let p1 = parseInt(dateParts[0], 10);
+          let p2 = parseInt(dateParts[1], 10);
+          let p3 = parseInt(dateParts[2], 10);
+
+          if (p1 > 1000) {
+            return new Date(p1, p2 - 1, p3, hour, min, sec);
+          }
+          if (p3 > 1000) {
+            return new Date(p3, p2 - 1, p1, hour, min, sec);
+          }
+        }
+      }
+
+      const parsedDirect = new Date(str);
+      return isNaN(parsedDirect.getTime()) ? null : parsedDirect;
+    }
+
+    // DEKLARASI PERHITUNGAN GAJI KASIR SEBELUM DIJALANKAN DI DEFAULT DATES
+    function calculateSalaryFromDates() {
+      const nameInput = document.getElementById("salEmployeeName");
+      const empName = nameInput ? nameInput.value.trim().toLowerCase() : "";
+      const startEl = document.getElementById("salStartDate");
+      const endEl = document.getElementById("salEndDate");
+      const start = startEl ? startEl.value : "";
+      const end = endEl ? endEl.value : "";
+
+      const rateInput = document.getElementById("salDailyRate");
+      const sickInput = document.getElementById("salSickDays");
+      const dedInput = document.getElementById("salDeduction");
+
+      const dailyRate = rateInput ? (Number(rateInput.value) || 0) : 0;
+      const sickDays = sickInput ? Math.max(0, Number(sickInput.value) || 0) : 0;
+      const deduction = dedInput ? Math.max(0, Number(dedInput.value) || 0) : 0;
+
+      let actualWorkDays = 0;
+      const uniqueDates = new Set();
+
+      if (empName.includes("owner") || empName.includes("admin")) {
+        const workDaysEl = document.getElementById("salWorkDaysDisplay");
+        const totalEl = document.getElementById("salTotalDisplay");
+        const formulaEl = document.getElementById("salDetailFormula");
+        if (workDaysEl) workDaysEl.innerText = `0 Hari (Admin/Owner)`;
+        if (totalEl) totalEl.innerText = formatRupiah(0);
+        if (formulaEl) formulaEl.innerText = "Akses Admin/Owner tidak dihitung gaji.";
+        return;
+      }
+
+      if (start && end && attendanceData && attendanceData.length > 0) {
+        const startDate = new Date(start + "T00:00:00");
+        const endDate = new Date(end + "T23:59:59");
+
+        attendanceData.forEach(row => {
+          const rowRole = String(row["Role"] || row["Akses"] || Object.values(row)[3] || "").trim().toLowerCase();
+          const rowName = String(row["Nama Karyawan"] || row["Nama"] || Object.values(row)[2] || "").trim().toLowerCase();
+
+          if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) {
+            return; 
+          }
+
+          const isNameMatch = empName !== "" && (rowName === empName || rowName.includes(empName) || empName.includes(rowName));
+
+          if (isNameMatch) {
+            const rawDate = row["Tanggal"] || row["Waktu"] || Object.values(row)[1] || "";
+            const dateObj = parseTransactionDate(rawDate);
+
+            if (dateObj && dateObj >= startDate && dateObj <= endDate) {
+              const dateKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
+              uniqueDates.add(dateKey);
+            }
+          }
+        });
+
+        actualWorkDays = uniqueDates.size;
+      }
+
+      const effectiveWorkDays = Math.max(0, actualWorkDays - sickDays);
+      const grossSalary = effectiveWorkDays * dailyRate;
+      const netSalary = Math.max(0, grossSalary - deduction);
+
+      const displayWorkDaysEl = document.getElementById("salWorkDaysDisplay");
+      if (displayWorkDaysEl) displayWorkDaysEl.innerText = `${actualWorkDays} Hari Kasir Masuk`;
+
+      const displaySickEl = document.getElementById("salSickDaysDisplay");
+      if (displaySickEl) displaySickEl.innerText = `${sickDays} Hari Sakit/Izin`;
+
+      const displayTotalEl = document.getElementById("salTotalDisplay");
+      if (displayTotalEl) displayTotalEl.innerText = formatRupiah(netSalary);
+
+      const displayFormulaEl = document.getElementById("salDetailFormula");
+      if (displayFormulaEl) {
+        displayFormulaEl.innerText = `(${effectiveWorkDays} hari masuk riil × ${formatRupiah(dailyRate)}) - ${formatRupiah(deduction)}`;
+      }
+
+      window.lastSalaryDebug = {
+        empName: empName,
+        dates: Array.from(uniqueDates),
+        count: actualWorkDays
+      };
+    }
+
+    function setDefaultDates() {
+      const today = new Date();
+      const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+      const startEl = document.getElementById("salStartDate");
+      const endEl = document.getElementById("salEndDate");
+      if (startEl) startEl.value = formatDateInput(firstDay);
+      if (endEl) endEl.value = formatDateInput(today);
+      calculateSalaryFromDates();
+    }
+
     document.addEventListener("DOMContentLoaded", () => {
       initThemeDefaultLight();
       setDefaultDates();
@@ -151,23 +296,6 @@
       const isDark = document.documentElement.classList.contains("dark");
       const icon = document.getElementById("themeIcon");
       if (icon) icon.className = isDark ? "fa-solid fa-sun" : "fa-solid fa-moon";
-    }
-
-    function setDefaultDates() {
-      const today = new Date();
-      const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-      const startEl = document.getElementById("salStartDate");
-      const endEl = document.getElementById("salEndDate");
-      if (startEl) startEl.value = formatDateInput(firstDay);
-      if (endEl) endEl.value = formatDateInput(today);
-      calculateSalaryFromDates();
-    }
-
-    function formatDateInput(date) {
-      const y = date.getFullYear();
-      const m = String(date.getMonth() + 1).padStart(2, "0");
-      const d = String(date.getDate()).padStart(2, "0");
-      return `${y}-${m}-${d}`;
     }
 
     function checkStoredLogin() {
@@ -1081,7 +1209,7 @@
           <div class="flex justify-between items-center p-2 rounded-xl bg-slate-50 dark:bg-slate-800 text-xs">
             <div>
               <p class="font-bold">${escapeHtml(item.namaProduk)}</p>
-              <p class="text-[10px] text-slate-400">${formatRupiah(item.harga)} ×${item.jumlah}</p>
+              <p class="text-[10px] text-slate-400">${formatRupiah(item.harga)} × ${item.jumlah}</p>
             </div>
             <div class="flex items-center gap-2">
               <span class="font-bold">${formatRupiah(subtotal)}</span>
@@ -1431,12 +1559,6 @@
       }
     }
 
-    function getNumericValue(value) {
-      if (typeof value === "number") return value;
-      if (value === null || value === undefined) return 0;
-      return Number(String(value).replace(/[^0-9-]/g, "")) || 0;
-    }
-
     async function fetchSalesData() {
       try {
         const response = await fetch(`${APPS_SCRIPT_URL}?action=getData`);
@@ -1682,35 +1804,6 @@
       return row["Tanggal & Waktu"] || row["Waktu"] || row["Tanggal"] || row["Date"] || row["Timestamp"] || Object.values(row)[1] || "";
     }
 
-    function parseTransactionDate(value) {
-      if (!value) return null;
-      if (value instanceof Date) return value;
-
-      const str = String(value).trim();
-      
-      if (str.includes("/") || str.includes("-")) {
-        const spaceParts = str.split(" ");
-        const delimiter = str.includes("/") ? "/" : "-";
-        const dParts = spaceParts[0].split(delimiter);
-
-        if (dParts.length === 3) {
-          let p1 = parseInt(dParts[0], 10);
-          let p2 = parseInt(dParts[1], 10);
-          let p3 = parseInt(dParts[2], 10);
-
-          if (p1 > 1000) {
-            return new Date(p1, p2 - 1, p3);
-          }
-          if (p3 > 1000) {
-            return new Date(p3, p2 - 1, p1);
-          }
-        }
-      }
-
-      const parsedDirect = new Date(value);
-      return isNaN(parsedDirect.getTime()) ? null : parsedDirect;
-    }
-
     function setDashboardFilter(filter) {
       activeFilter = filter;
       const buttons = { today: "filterToday", "7days": "filter7Days", month: "filterMonth", all: "filterAll" };
@@ -1881,7 +1974,7 @@
         filteredData.forEach(row => {
           const d = parseTransactionDate(getRowDateString(row));
           if (d) {
-            const mKey = `${monthNames[d.getMonth()]}${d.getFullYear()}`;
+            const mKey = `${monthNames[d.getMonth()]} ${d.getFullYear()}`;
             if (!monthMap[mKey]) monthMap[mKey] = { omset: 0, qty: 0 };
             monthMap[mKey].omset += getNumericValue(row["Total Harga"] || row["Total"]);
             monthMap[mKey].qty += Number(row["Jumlah"] || row["Qty"]) || 0;
@@ -2004,4 +2097,437 @@
         if (tbody) {
           tbody.innerHTML += `
             <tr class="border-b border-slate-100 dark:border-slate-800">
-              <td class="py-2.5 px-
+              <td class="py-2.5 px-3 font-mono text-[11px]">${escapeHtml(row["ID Transaksi"] || row["ID"] || "-")}</td>
+              <td class="py-2.5 px-3 text-slate-500">${escapeHtml(timeStr)}</td>
+              <td class="py-2.5 px-3 font-semibold">${escapeHtml(row["Nama Produk"] || row["Produk"] || "-")}</td>
+              <td class="py-2.5 px-3 text-center">${Number(row["Jumlah"] || row["Qty"]) || 0}</td>
+              <td class="py-2.5 px-3 text-center">${methodBadge}</td>
+              <td class="py-2.5 px-3 text-right">${formatRupiah(harga)}</td>
+              <td class="py-2.5 px-3 text-right font-bold text-brand-600">${formatRupiah(total)}</td>
+            </tr>`;
+        }
+
+        if (kasirTbody && index < 5) {
+          kasirTbody.innerHTML += `
+            <tr class="border-b border-slate-100 dark:border-slate-800">
+              <td class="py-2 px-3 text-slate-400">${escapeHtml(timeStr)}</td>
+              <td class="py-2 px-3 font-medium">${escapeHtml(row["Nama Produk"] || row["Produk"] || "-")}</td>
+              <td class="py-2 px-3 text-center">${Number(row["Jumlah"] || row["Qty"]) || 0}</td>
+              <td class="py-2 px-3 text-center">${methodBadge}</td>
+              <td class="py-2 px-3 text-right font-bold text-brand-600">${formatRupiah(total)}</td>
+            </tr>`;
+        }
+      });
+    }
+
+    function exportToCSV() {
+      if (!salesData.length) { alert("Belum ada data transaksi."); return; }
+      let csv = "ID Transaksi,Tanggal & Waktu,Nama Produk,Jumlah,Metode Pembayaran,Harga Satuan,Total Harga\n";
+      salesData.forEach(row => {
+        const dateStr = getRowDateString(row);
+        const date = parseTransactionDate(dateStr);
+        const time = date ? date.toLocaleString("id-ID") : (dateStr || "");
+        csv += [
+          row["ID Transaksi"] || row["ID"] || "",
+          time,
+          row["Nama Produk"] || row["Produk"] || "",
+          row["Jumlah"] || row["Qty"] || 0,
+          row["Metode Pembayaran"] || row["Metode"] || "Tunai",
+          row["Harga Satuan"] || row["Harga"] || 0,
+          row["Total Harga"] || row["Total"] || 0
+        ].map(value => `"${String(value).replace(/"/g, '""')}"`).join(",") + "\n";
+      });
+
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const link = document.createElement("a");
+      const url = URL.createObjectURL(blob);
+      link.href = url;
+      link.download = `Penjualan_InuChicken_${formatDateInput(new Date())}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+
+    async function triggerYearlyArchive() {
+      const confirmFirst = confirm("PERINGATAN!\n\nProses ini akan mengarsipkan seluruh data Penjualan & HPP tahun ini ke tab baru di Google Sheets, lalu mengosongkan sheet utama untuk tahun baru.\n\nApakah Anda yakin ingin melanjutkan?");
+      if (!confirmFirst) return;
+
+      const doubleCheck = prompt("Ketik 'ARSIP' (huruf besar) untuk mengonfirmasi proses reset:");
+      if (doubleCheck !== "ARSIP") {
+        alert("Konfirmasi tidak sesuai. Proses dibatalkan.");
+        return;
+      }
+
+      const btn = document.getElementById("btnArchiveData");
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Mengarsipkan...';
+      }
+
+      try {
+        const payload = { action: "archiveYearlyData" };
+        const response = await fetch(APPS_SCRIPT_URL, {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+
+        if (data.status === "success") {
+          alert(data.message);
+          await fetchSalesData();
+        } else {
+          alert("Gagal melakukan arsip:\n" + data.message);
+        }
+      } catch (error) {
+        console.error(error);
+        alert("Terjadi kesalahan jaringan saat melakukan arsip.");
+        reportErrorToBackend("triggerYearlyArchive error", error);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<i class="fa-solid fa-box-archive"></i> Arsip & Reset Tahun Baru';
+        }
+      }
+    }
+
+    function populateEmployeeOptions() {
+      const datalist = document.getElementById("employeeListOptions");
+      if (!datalist) return;
+
+      datalist.innerHTML = "";
+      const uniqueKasirNames = new Set();
+
+      if (attendanceData && attendanceData.length > 0) {
+        attendanceData.forEach(row => {
+          const role = String(row["Role"] || row["Akses"] || Object.values(row)[3] || "").toLowerCase().trim();
+          const name = String(row["Nama Karyawan"] || row["Nama"] || Object.values(row)[2] || "").trim();
+
+          if (!role.includes("admin") && !role.includes("owner") && !name.toLowerCase().includes("owner") && !name.toLowerCase().includes("admin") && name !== "") {
+            uniqueKasirNames.add(name);
+          }
+        });
+      }
+
+      uniqueKasirNames.forEach(name => {
+        datalist.innerHTML += `<option value="${escapeHtml(name)}">`;
+      });
+
+      const nameInput = document.getElementById("salEmployeeName");
+      if (nameInput) {
+        const currentVal = nameInput.value.trim().toLowerCase();
+        if (!currentVal || currentVal === "kasir shift" || currentVal === "owner / admin" || currentVal.includes("owner") || currentVal.includes("admin")) {
+          const firstKasir = Array.from(uniqueKasirNames)[0] || "Kasir Shift";
+          nameInput.value = firstKasir;
+          if (firstKasir !== "Kasir Shift") onEmployeeNameChange();
+        }
+      }
+    }
+
+    function onEmployeeNameChange() {
+      const nameInput = document.getElementById("salEmployeeName");
+      if (!nameInput) return;
+
+      const empName = nameInput.value.trim().toLowerCase();
+      let minDate = null;
+      let maxDate = null;
+
+      if (attendanceData && attendanceData.length > 0) {
+        attendanceData.forEach(row => {
+          const rowRole = String(row["Role"] || row["Akses"] || Object.values(row)[3] || "").toLowerCase().trim();
+          const rowName = String(row["Nama Karyawan"] || row["Nama"] || Object.values(row)[2] || "").trim().toLowerCase();
+
+          if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) return;
+
+          const isMatch = (empName !== "" && (rowName === empName || rowName.includes(empName) || empName.includes(rowName)));
+
+          if (isMatch) {
+            const rawDate = row["Tanggal"] || row["Waktu"] || Object.values(row)[1] || "";
+            const dateObj = parseTransactionDate(rawDate);
+
+            if (dateObj && !isNaN(dateObj.getTime())) {
+              if (!minDate || dateObj < minDate) minDate = dateObj;
+              if (!maxDate || dateObj > maxDate) maxDate = dateObj;
+            }
+          }
+        });
+      }
+
+      if (minDate && maxDate) {
+        const startEl = document.getElementById("salStartDate");
+        const endEl = document.getElementById("salEndDate");
+        if (startEl) startEl.value = formatDateInput(minDate);
+        if (endEl) endEl.value = formatDateInput(maxDate);
+      } else {
+        setDefaultDates();
+      }
+
+      calculateSalaryFromDates();
+    }
+
+    function showSalaryDebugModal() {
+      const debugData = window.lastSalaryDebug;
+      if (!debugData || !debugData.dates || debugData.dates.length === 0) {
+        alert("Belum ada data tanggal absensi kasir yang terdeteksi pada rentang ini.");
+        return;
+      }
+
+      alert(`DETAIL ABSENSI KASIR (${debugData.empName.toUpperCase()}):\n\nTotal Hari Masuk: ${debugData.count} Hari\n\nTanggal Kehadiran:\n- ` + debugData.dates.join("\n- "));
+    }
+
+    async function saveSalaryToSheet() {
+      const nameInput = document.getElementById("salEmployeeName");
+      const name = nameInput ? nameInput.value.trim() : "";
+      const start = document.getElementById("salStartDate").value;
+      const end = document.getElementById("salEndDate").value;
+      const dedInput = document.getElementById("salDeduction");
+      const deduction = dedInput ? (Number(dedInput.value) || 0) : 0;
+
+      if (!name || name.toLowerCase().includes("owner") || name.toLowerCase().includes("admin")) {
+        alert("Pilih nama kasir yang valid terlebih dahulu.");
+        return;
+      }
+
+      function displayDate(value) {
+        if (!value) return "-";
+        const [y, m, d] = value.split("-");
+        return `${d}/${m}/${y}`;
+      }
+
+      const totalDisplayEl = document.getElementById("salTotalDisplay");
+      const totalText = totalDisplayEl ? totalDisplayEl.innerText : "0";
+      const netSalaryFromUI = getNumericValue(totalText);
+
+      const workDaysText = document.getElementById("salWorkDaysDisplay") ? document.getElementById("salWorkDaysDisplay").innerText : "0";
+      const workDaysFromUI = getNumericValue(workDaysText);
+
+      const periodStr = `${displayDate(start)} - ${displayDate(end)}`;
+
+      if (netSalaryFromUI <= 0) {
+        alert("Nominal Gaji Bersih di layar masih Rp 0. Tidak ada data yang disimpan.");
+        return;
+      }
+
+      if (!confirm(`Simpan rekap gaji ke Google Sheets?\n\nNama: ${name}\nPeriode: ${periodStr}\nHari Kerja: ${workDaysFromUI} Hari\nTotal Bersih: ${formatRupiah(netSalaryFromUI)}`)) {
+        return;
+      }
+
+      const btn = document.getElementById("btnSaveSalary");
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
+      }
+
+      try {
+        const payload = {
+          action: "saveSalary",
+          employeeName: name,
+          period: periodStr,
+          workDays: Number(workDaysFromUI),
+          deduction: Number(deduction),
+          netSalary: Number(netSalaryFromUI),
+          notes: `Gaji Pokok: ${formatRupiah(netSalaryFromUI + deduction)}`
+        };
+
+        const response = await fetch(APPS_SCRIPT_URL, { 
+          method: "POST", 
+          body: JSON.stringify(payload) 
+        });
+        const res = await response.json();
+
+        if (res.status === "success") {
+          alert("Rekap gaji berhasil disimpan ke Google Sheets!");
+          await fetchSalesData();
+        } else { 
+          alert("Gagal menyimpan rekap gaji: " + (res.message || "Error server")); 
+        }
+      } catch (error) {
+        console.error(error);
+        alert("Terjadi kesalahan jaringan.");
+        reportErrorToBackend("saveSalaryToSheet error", error);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Simpan Rekap Gaji ke Sheet';
+        }
+      }
+    }
+
+    function renderSalaryHistoryTable() {
+      const tbody = document.getElementById("salaryHistoryTableBody");
+      if (!tbody) return;
+
+      tbody.innerHTML = "";
+
+      if (!salaryHistoryData || salaryHistoryData.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="8" class="text-center py-4 text-slate-400">Belum ada riwayat penggajian tersimpan.</td></tr>`;
+        return;
+      }
+
+      const reversed = salaryHistoryData.slice().reverse();
+      reversed.forEach(row => {
+        const salId = row["ID Gaji"] || row["ID"] || Object.values(row)[0] || "-";
+        const payDate = row["Tanggal Bayar"] || row["Tgl Pembayaran"] || row["Tanggal"] || Object.values(row)[1] || "-";
+        const empName = row["Nama Karyawan"] || row["Nama"] || Object.values(row)[2] || "-";
+        const period = row["Periode"] || Object.values(row)[3] || "-";
+        const workDays = row["Hari Kerja"] || Object.values(row)[4] || 0;
+        const deduction = parseDecimal(row["Kasbon/Potongan"] || row["Potongan"] || Object.values(row)[5]);
+        const netSalary = parseDecimal(row["Gaji Bersih"] || row["Total Gaji"] || row["Total"] || Object.values(row)[6]);
+
+        tbody.innerHTML += `
+          <tr class="border-b border-slate-100 dark:border-slate-800">
+            <td class="py-2.5 px-3 font-mono text-[11px]">${escapeHtml(salId)}</td>
+            <td class="py-2.5 px-3 text-slate-500">${escapeHtml(payDate)}</td>
+            <td class="py-2.5 px-3 font-bold text-slate-800 dark:text-slate-200">${escapeHtml(empName)}</td>
+            <td class="py-2.5 px-3">${escapeHtml(period)}</td>
+            <td class="py-2.5 px-3 text-center font-bold text-blue-600">${workDays} Hari</td>
+            <td class="py-2.5 px-3 text-right text-red-500">${formatRupiah(deduction)}</td>
+            <td class="py-2.5 px-3 text-right font-black text-emerald-600">${formatRupiah(netSalary)}</td>
+            <td class="py-2.5 px-3 text-center">
+              <button onclick="printSalarySlipFromRow('${escapeHtml(empName)}', '${escapeHtml(period)}', ${workDays}, ${deduction}, ${netSalary})" class="px-2 py-1 bg-brand-600 hover:bg-brand-700 text-white rounded text-[10px] font-bold">
+                <i class="fa-solid fa-print"></i> Cetak Slip
+              </button>
+            </td>
+          </tr>`;
+      });
+    }
+
+    function renderErrorLogTable() {
+      const tbody = document.getElementById("errorLogTableBody");
+      if (!tbody) return;
+
+      tbody.innerHTML = "";
+
+      if (!errorLogData || errorLogData.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-slate-400">Tidak ada log error / bug tercatat. Sistem berjalan normal!</td></tr>`;
+        return;
+      }
+
+      const reversed = errorLogData.slice().reverse();
+      reversed.forEach(row => {
+        const errId = row["ID Error"] || row["ID"] || Object.values(row)[0] || "-";
+        const time = row["Waktu"] || row["Tanggal"] || Object.values(row)[1] || "-";
+        const user = row["User / Role"] || row["User"] || row["Role"] || Object.values(row)[2] || "-";
+        const msg = row["Pesan Error"] || row["Message"] || Object.values(row)[3] || "-";
+        const detail = row["Detail / Stack Trace"] || row["Detail"] || Object.values(row)[4] || "-";
+
+        tbody.innerHTML += `
+          <tr class="border-b border-slate-100 dark:border-slate-800 text-xs">
+            <td class="py-2.5 px-3 font-mono text-[10px] text-red-500 font-bold">${escapeHtml(errId)}</td>
+            <td class="py-2.5 px-3 text-slate-400">${escapeHtml(time)}</td>
+            <td class="py-2.5 px-3 font-semibold text-slate-800 dark:text-slate-200">${escapeHtml(user)}</td>
+            <td class="py-2.5 px-3 font-bold text-red-600 dark:text-red-400">${escapeHtml(msg)}</td>
+            <td class="py-2.5 px-3 font-mono text-[10px] text-slate-500 max-w-xs truncate" title="${escapeHtml(detail)}">${escapeHtml(detail)}</td>
+          </tr>`;
+      });
+    }
+
+    function printSalarySlipFromRow(name, period, workDays, deduction, netSalary) {
+      const gross = netSalary + deduction;
+
+      const printNameEl = document.getElementById("printName");
+      const printSignEl = document.getElementById("printSignEmp");
+      const printPeriodEl = document.getElementById("printPeriod");
+      const printSickEl = document.getElementById("printSickDaysText");
+      const printDateEl = document.getElementById("printDate");
+      const printBaseEl = document.getElementById("printBase");
+      const printDeductionEl = document.getElementById("printDeduction");
+      const printTotalEl = document.getElementById("printTotal");
+
+      if (printNameEl) printNameEl.innerText = name;
+      if (printSignEl) printSignEl.innerText = `( ${name} )`;
+      if (printPeriodEl) printPeriodEl.innerText = period;
+      if (printSickEl) printSickEl.innerText = "0 Hari";
+      if (printDateEl) printDateEl.innerText = new Date().toLocaleString("id-ID");
+      if (printBaseEl) printBaseEl.innerText = `${formatRupiah(gross)} (${workDays} Hari Kerja)`;
+      if (printDeductionEl) printDeductionEl.innerText = `- ${formatRupiah(deduction)}`;
+      if (printTotalEl) printTotalEl.innerText = formatRupiah(netSalary);
+
+      window.print();
+    }
+
+    function printSalarySlip() {
+      calculateSalaryFromDates();
+      const nameInput = document.getElementById("salEmployeeName");
+      const name = nameInput ? nameInput.value : "";
+      const startEl = document.getElementById("salStartDate");
+      const endEl = document.getElementById("salEndDate");
+      const start = startEl ? startEl.value : "";
+      const end = endEl ? endEl.value : "";
+
+      const rateInput = document.getElementById("salDailyRate");
+      const sickInput = document.getElementById("salSickDays");
+      const dedInput = document.getElementById("salDeduction");
+
+      const dailyRate = rateInput ? (Number(rateInput.value) || 0) : 0;
+      const sickDays = sickInput ? (Number(sickInput.value) || 0) : 0;
+      const deduction = dedInput ? (Number(dedInput.value) || 0) : 0;
+
+      let actualWorkDays = 0;
+      const uniqueDates = new Set();
+
+      if (start && end && attendanceData.length > 0) {
+        const startDate = new Date(start + "T00:00:00");
+        const endDate = new Date(end + "T23:59:59");
+        const empName = name.trim().toLowerCase();
+
+        attendanceData.forEach(row => {
+          const rowRole = String(row["Role"] || row["Akses"] || Object.values(row)[3] || "").trim().toLowerCase();
+          const rowName = String(row["Nama Karyawan"] || row["Nama"] || Object.values(row)[2] || "").trim().toLowerCase();
+
+          if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) return;
+
+          if (rowName.includes(empName) || empName.includes(rowName) || empName === "") {
+            const rawDate = row["Tanggal"] || row["Waktu"] || Object.values(row)[1] || "";
+            const dateObj = parseTransactionDate(rawDate);
+            if (dateObj && dateObj >= startDate && dateObj <= endDate) {
+              const dateKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
+              uniqueDates.add(dateKey);
+            }
+          }
+        });
+
+        actualWorkDays = uniqueDates.size;
+      }
+
+      const effective = Math.max(0, actualWorkDays - sickDays);
+      const gross = effective * dailyRate;
+      const net = Math.max(0, gross - deduction);
+
+      function displayDate(value) {
+        if (!value) return "-";
+        const [y,m,d] = value.split("-");
+        return `${d}/${m}/${y}`;
+      }
+
+      const printNameEl = document.getElementById("printName");
+      const printSignEl = document.getElementById("printSignEmp");
+      const printPeriodEl = document.getElementById("printPeriod");
+      const printSickEl = document.getElementById("printSickDaysText");
+      const printDateEl = document.getElementById("printDate");
+      const printBaseEl = document.getElementById("printBase");
+      const printDeductionEl = document.getElementById("printDeduction");
+      const printTotalEl = document.getElementById("printTotal");
+
+      if (printNameEl) printNameEl.innerText = name;
+      if (printSignEl) printSignEl.innerText = `( ${name} )`;
+      if (printPeriodEl) printPeriodEl.innerText = `${displayDate(start)} s/d ${displayDate(end)} (${actualWorkDays} Hari Kerja)`;
+      if (printSickEl) printSickEl.innerText = `${sickDays} Hari`;
+      if (printDateEl) printDateEl.innerText = new Date().toLocaleString("id-ID");
+      if (printBaseEl) printBaseEl.innerText = `${formatRupiah(gross)} (${effective} hari × ${formatRupiah(dailyRate)})`;
+      if (printDeductionEl) printDeductionEl.innerText = `- ${formatRupiah(deduction)}`;
+      if (printTotalEl) printTotalEl.innerText = formatRupiah(net);
+
+      window.print();
+    }
+
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js')
+          .then(reg => console.log('Service Worker Registered! Scope:', reg.scope))
+          .catch(err => console.log('Service Worker Error:', err));
+      });
+    }
+  </script>
+</body>
+</html>
