@@ -1438,54 +1438,55 @@
       return Number(String(value).replace(/[^0-9-]/g, "")) || 0;
     }
 
-    async function fetchSalesData() {
-      try {
-        const response = await fetch(`${APPS_SCRIPT_URL}?action=getData`);
-        const data = await response.json();
-        if (data.status !== "success") { console.error(data.message); return; }
+    // FUNGSI FETCH DATA DENGAN PENGAMBILAN LOG ERROR AKURAT
+async function fetchSalesData() {
+  try {
+    const response = await fetch(`${APPS_SCRIPT_URL}?action=getData`);
+    const data = await response.json();
+    if (data.status !== "success") { console.error(data.message); return; }
 
-        salesData = data.data || [];
-        const masterHpp = data.masterHpp || [];
-        hppHistoryData = data.hppData || [];
-        attendanceData = data.absensiData || [];
-        salaryHistoryData = data.gajiData || [];
-        errorLogData = data.errorData || [];
+    salesData = data.data || [];
+    const masterHpp = data.masterHpp || [];
+    hppHistoryData = data.hppData || [];
+    attendanceData = data.absensiData || [];
+    salaryHistoryData = data.gajiData || [];
+    errorLogData = data.errorData || []; // Menyimpan data error log
 
-        materialsData = masterHpp.map(item => {
-          const nama = item["Nama Bahan Baku"] || item["Nama Bahan"] || item.nama || item["Bahan"] || item["Nama"] || Object.values(item)[0] || "Bahan";
-          const qty = parseDecimal(item["Kuantitas Standar Harian"] || item["Qty"] || item.qty || item["Jumlah"] || Object.values(item)[1]) || 1;
+    materialsData = masterHpp.map(item => {
+      const nama = item["Nama Bahan Baku"] || item["Nama Bahan"] || item.nama || item["Bahan"] || item["Nama"] || Object.values(item)[0] || "Bahan";
+      const qty = parseDecimal(item["Kuantitas Standar Harian"] || item["Qty"] || item.qty || item["Jumlah"] || Object.values(item)[1]) || 1;
 
-          let totalBiaya = parseDecimal(item["Biaya Standar Harian (Rp)"] || item["Biaya Standar Harian"] || item["Biaya"] || item.biaya);
-          let hargaSatuan = parseDecimal(item["Harga Satuan"] || item.hargaSatuan || item["Harga"]);
+      let totalBiaya = parseDecimal(item["Biaya Standar Harian (Rp)"] || item["Biaya Standar Harian"] || item["Biaya"] || item.biaya);
+      let hargaSatuan = parseDecimal(item["Harga Satuan"] || item.hargaSatuan || item["Harga"]);
 
-          if (hargaSatuan === 0 && totalBiaya > 0 && qty > 0) {
-            hargaSatuan = totalBiaya / qty;
-          } else if (totalBiaya === 0 && hargaSatuan > 0) {
-            totalBiaya = hargaSatuan * qty;
-          }
-
-          return {
-            nama: nama,
-            qty: qty,
-            hargaSatuan: hargaSatuan,
-            biaya: totalBiaya
-          };
-        });
-
-        dailyMaterialsData = JSON.parse(JSON.stringify(materialsData));
-
-        renderMaterialsTable();
-        renderDashboard();
-        renderExpenseAnalysis();
-        populateEmployeeOptions();
-        calculateSalaryFromDates();
-        renderSalaryHistoryTable();
-        renderErrorLogTable();
-      } catch (error) {
-        console.error("fetchSalesData error:", error);
-        reportErrorToBackend("fetchSalesData error", error);
+      if (hargaSatuan === 0 && totalBiaya > 0 && qty > 0) {
+        hargaSatuan = totalBiaya / qty;
+      } else if (totalBiaya === 0 && hargaSatuan > 0) {
+        totalBiaya = hargaSatuan * qty;
       }
-    }
+
+      return {
+        nama: nama,
+        qty: qty,
+        hargaSatuan: hargaSatuan,
+        biaya: totalBiaya
+      };
+    });
+
+    dailyMaterialsData = JSON.parse(JSON.stringify(materialsData));
+
+    renderMaterialsTable();
+    renderDashboard();
+    renderExpenseAnalysis();
+    populateEmployeeOptions();
+    calculateSalaryFromDates();
+    renderSalaryHistoryTable();
+    renderErrorLogTable(); // Panggil rendering tabel error log
+  } catch (error) {
+    console.error("fetchSalesData error:", error);
+    reportErrorToBackend("fetchSalesData error", error);
+  }
+}
 
     function setExpenseFilter(filter) {
       activeExpenseFilter = filter;
@@ -2383,7 +2384,7 @@
       });
     }
 
-   // RENDERING TABEL LOG ERROR (DENGAN PEMBACAAN HEADER PRESISI)
+// RENDERING TABEL LOG ERROR KETAT & TOLERAN NAMA KOLOM
 function renderErrorLogTable() {
   const tbody = document.getElementById("errorLogTableBody");
   if (!tbody) return;
@@ -2397,12 +2398,12 @@ function renderErrorLogTable() {
 
   const reversed = errorLogData.slice().reverse();
   reversed.forEach(row => {
-    // Pembacaan fleksibel mencakup "User / Role", "User", "Role", atau posisi kolom ke-3
+    // Ambil properti fleksibel berdasarkan kunci atau urutan objek
     const errId = row["ID Error"] || row["ID"] || Object.values(row)[0] || "-";
     const time = row["Waktu"] || row["Tanggal"] || Object.values(row)[1] || "-";
-    const user = row["User / Role"] || row["User"] || row["Role"] || row["user"] || Object.values(row)[2] || "-";
-    const msg = row["Pesan Error"] || row["Message"] || row["message"] || Object.values(row)[3] || "-";
-    const detail = row["Detail / Stack Trace"] || row["Detail"] || row["detail"] || Object.values(row)[4] || "-";
+    const user = row["User / Role"] || row["User"] || row["Role"] || Object.values(row)[2] || "-";
+    const msg = row["Pesan Error"] || row["Message"] || Object.values(row)[3] || "-";
+    const detail = row["Detail / Stack Trace"] || row["Detail"] || Object.values(row)[4] || "-";
 
     tbody.innerHTML += `
       <tr class="border-b border-slate-100 dark:border-slate-800 text-xs">
