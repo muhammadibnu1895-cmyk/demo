@@ -75,6 +75,318 @@
       -moz-appearance: numberinput !important;
     }
   </style>
+
+  <!-- JAVASCRIPT GLOBAL & UTAMA DIPINDAHKAN KE HEAD AGAR FUNGSI TERSEDIA SEBELUM HTML DIPROSES -->
+  <script>
+    const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxqnpjgoLlPVZDSjvAy5Amy0YZl1Vf9AG9wwxPqsXjut1i96DzUqySM3OrBIPEhQDvwUQ/exec";
+
+    let cart = [];
+    let salesData = [];
+    let materialsData = [];
+    let dailyMaterialsData = [];
+    let hppHistoryData = [];
+    let attendanceData = [];
+    let salaryHistoryData = [];
+    let errorLogData = [];
+
+    let activeFilter = "today";
+    let activeExpenseFilter = "today";
+
+    let currentRole = null;
+    let currentPaymentMethod = "Tunai";
+    let barChartInstance = null;
+    let topSalesChartInstance = null;
+    let expenseChartInstance = null;
+
+    window.onerror = function (message, source, lineno, colno, error) {
+      reportErrorToBackend(message, `Line: ${lineno}:${colno} | ${error ? error.stack : ""}`);
+      return false;
+    };
+
+    function reportErrorToBackend(msg, detail) {
+      if (!APPS_SCRIPT_URL) return;
+      const userName = sessionStorage.getItem("inu_pos_user_name") || "Guest";
+      fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        body: JSON.stringify({
+          action: "logError",
+          user: `${userName} (${currentRole || "No Role"})`,
+          message: String(msg),
+          detail: String(detail || "-")
+        }),
+        keepalive: true
+      }).catch(() => {});
+    }
+
+    function formatRupiah(number) {
+      return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(number) || 0);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+    }
+
+    function parseDecimal(val) {
+      if (val === null || val === undefined || val === "") return 0;
+      if (typeof val === "number") return val;
+      let str = String(val).trim().replace(",", ".");
+      return parseFloat(str) || 0;
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      initThemeDefaultLight();
+      setDefaultDates();
+      renderCart();
+      checkStoredLogin();
+    });
+
+    function initThemeDefaultLight() {
+      document.documentElement.classList.remove("dark");
+      const icon = document.getElementById("themeIcon");
+      if (icon) icon.className = "fa-solid fa-moon";
+    }
+
+    function toggleTheme() {
+      document.documentElement.classList.toggle("dark");
+      const isDark = document.documentElement.classList.contains("dark");
+      const icon = document.getElementById("themeIcon");
+      if (icon) icon.className = isDark ? "fa-solid fa-sun" : "fa-solid fa-moon";
+    }
+
+    function setDefaultDates() {
+      const today = new Date();
+      const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+      const startEl = document.getElementById("salStartDate");
+      const endEl = document.getElementById("salEndDate");
+      if (startEl) startEl.value = formatDateInput(firstDay);
+      if (endEl) endEl.value = formatDateInput(today);
+      calculateSalaryFromDates();
+    }
+
+    function formatDateInput(date) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const d = String(date.getDate()).padStart(2, "0");
+      return `${y}-${m}-${d}`;
+    }
+
+    function checkStoredLogin() {
+      const savedRole = sessionStorage.getItem("inu_pos_role");
+      const savedName = sessionStorage.getItem("inu_pos_user_name");
+
+      if ((savedRole === "admin" || savedRole === "kasir") && savedName) {
+        currentRole = savedRole;
+        applyPermissions();
+
+        const modal = document.getElementById("loginModal");
+        if (modal) modal.classList.add("hidden");
+        fetchSalesData();
+      } else {
+        const modal = document.getElementById("loginModal");
+        if (modal) modal.classList.remove("hidden");
+      }
+    }
+
+    async function handleAppLogin() {
+      const pinInput = document.getElementById("appPinInput");
+      const pin = pinInput ? pinInput.value.trim() : "";
+      const errEl = document.getElementById("loginErrorMsg");
+      if (errEl) errEl.classList.add("hidden");
+
+      if (!pin) {
+        if (errEl) {
+          errEl.innerText = "Masukkan PIN terlebih dahulu.";
+          errEl.classList.remove("hidden");
+        }
+        return;
+      }
+
+      try {
+        const response = await fetch(`${APPS_SCRIPT_URL}?action=verifyPin&pin=${encodeURIComponent(pin)}`);
+        const res = await response.json();
+
+        if (res.status === "success" && res.valid) {
+          currentRole = res.role;
+          const empName = res.employeeName || (currentRole === "admin" ? "Owner / Admin" : "Kasir Shift");
+
+          sessionStorage.setItem("inu_pos_role", res.role);
+          sessionStorage.setItem("inu_pos_user_name", empName);
+
+          applyPermissions();
+
+          const modal = document.getElementById("loginModal");
+          if (modal) modal.classList.add("hidden");
+
+          fetch(APPS_SCRIPT_URL, {
+            method: "POST",
+            body: JSON.stringify({
+              action: "recordAttendance",
+              type: "clockIn",
+              role: currentRole,
+              employeeName: empName
+            })
+          }).then(r => r.json()).then(att => {
+            if (att && att.attendanceId) {
+              sessionStorage.setItem("active_attendance_id", att.attendanceId);
+            }
+          }).catch(e => reportErrorToBackend("Absen log error", e));
+
+          await fetchSalesData();
+        } else {
+          if (errEl) {
+            errEl.innerText = "PIN Salah / Tidak Terdaftar!";
+            errEl.classList.remove("hidden");
+          }
+        }
+      } catch (error) {
+        if (errEl) {
+          errEl.innerText = "Tidak dapat terhubung ke server.";
+          errEl.classList.remove("hidden");
+        }
+        reportErrorToBackend("Login Connection Error", error);
+      }
+    }
+
+    function applyPermissions() {
+      const badge = document.getElementById("userRoleBadge");
+      const roleNav = document.getElementById("roleNavContainer");
+
+      if (currentRole === "admin") {
+        if (badge) badge.innerText = "Akses: ADMIN";
+        if (roleNav) roleNav.classList.remove("hidden");
+        switchRole("admin");
+      } else {
+        if (badge) badge.innerText = "Akses: KASIR";
+        if (roleNav) roleNav.classList.add("hidden");
+        switchRole("kasir");
+      }
+    }
+
+    async function logoutApp() {
+      const activeAttId = sessionStorage.getItem("active_attendance_id");
+      const userName = sessionStorage.getItem("inu_pos_user_name") || (currentRole === "admin" ? "Owner / Admin" : "Kasir Shift");
+
+      if (activeAttId || userName) {
+        const payload = JSON.stringify({
+          action: "recordAttendance",
+          type: "clockOut",
+          attendanceId: activeAttId || "",
+          employeeName: userName,
+          role: currentRole
+        });
+
+        try {
+          fetch(APPS_SCRIPT_URL, {
+            method: "POST",
+            body: payload,
+            keepalive: true,
+            headers: { "Content-Type": "text/plain;charset=utf-8" }
+          }).catch(e => console.log("Clockout send error:", e));
+        } catch (e) {
+          console.log("Logout error:", e);
+        }
+
+        sessionStorage.removeItem("active_attendance_id");
+      }
+
+      sessionStorage.removeItem("inu_pos_role");
+      sessionStorage.removeItem("inu_pos_user_name");
+      currentRole = null;
+      cart = [];
+      renderCart();
+      
+      const pinInput = document.getElementById("appPinInput");
+      if (pinInput) pinInput.value = "";
+      const modal = document.getElementById("loginModal");
+      if (modal) modal.classList.remove("hidden");
+    }
+
+    window.addEventListener("beforeunload", () => {
+      const activeAttId = sessionStorage.getItem("active_attendance_id");
+      const userName = sessionStorage.getItem("inu_pos_user_name");
+
+      if ((activeAttId || userName) && APPS_SCRIPT_URL) {
+        const payload = JSON.stringify({
+          action: "recordAttendance",
+          type: "clockOut",
+          attendanceId: activeAttId || "",
+          employeeName: userName || "",
+          role: currentRole
+        });
+
+        fetch(APPS_SCRIPT_URL, {
+          method: "POST",
+          body: payload,
+          keepalive: true,
+          headers: { "Content-Type": "text/plain;charset=utf-8" }
+        });
+      }
+    });
+
+    function switchRole(role) {
+      if (role === "admin" && currentRole !== "admin") {
+        alert("Akses ditolak. Anda tidak memiliki izin Admin.");
+        return;
+      }
+
+      const viewKasir = document.getElementById("viewKasir");
+      const viewAdmin = document.getElementById("viewAdmin");
+      const btnAdmin = document.getElementById("btnRoleAdmin");
+      const btnKasir = document.getElementById("btnRoleKasir");
+
+      if (role === "admin") {
+        if (viewKasir) viewKasir.classList.add("hidden");
+        if (viewAdmin) viewAdmin.classList.remove("hidden");
+        if (btnAdmin) btnAdmin.classList.add("bg-white", "dark:bg-slate-700", "text-brand-600", "shadow-sm");
+        if (btnKasir) btnKasir.classList.remove("bg-white", "dark:bg-slate-700", "text-brand-600", "shadow-sm");
+        showAdminSubTab("analisis");
+      } else {
+        if (viewAdmin) viewAdmin.classList.add("hidden");
+        if (viewKasir) viewKasir.classList.remove("hidden");
+        if (btnKasir) btnKasir.classList.add("bg-white", "dark:bg-slate-700", "text-brand-600", "shadow-sm");
+        if (btnAdmin) btnAdmin.classList.remove("bg-white", "dark:bg-slate-700", "text-brand-600", "shadow-sm");
+      }
+    }
+
+    function showAdminSubTab(tabName) {
+      const tabs = ["Analisis", "Pengeluaran", "MasterHpp", "Costing", "Gaji", "Data", "ErrorLog"];
+      tabs.forEach(name => {
+        const el = document.getElementById(`subTab${name}`);
+        const btn = document.getElementById(`tabBtn${name}`);
+        if (el) el.classList.add("hidden");
+        if (btn) btn.className = "px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300";
+      });
+
+      const map = { analisis: "Analisis", pengeluaran: "Pengeluaran", masterHpp: "MasterHpp", costing: "Costing", gaji: "Gaji", data: "Data", errorLog: "ErrorLog" };
+      const selected = map[tabName];
+      if (!selected) return;
+
+      const selectedEl = document.getElementById(`subTab${selected}`);
+      const selectedBtn = document.getElementById(`tabBtn${selected}`);
+      if (selectedEl) selectedEl.classList.remove("hidden");
+      if (selectedBtn) {
+        if (tabName === "errorLog") {
+          selectedBtn.className = "px-4 py-2 rounded-xl text-xs font-bold bg-red-600 text-white shadow-sm";
+        } else {
+          selectedBtn.className = "px-4 py-2 rounded-xl text-xs font-bold bg-brand-600 text-white shadow-sm";
+        }
+      }
+
+      if (tabName === "analisis") renderDashboard();
+      if (tabName === "pengeluaran") renderExpenseAnalysis();
+      if (tabName === "masterHpp" || tabName === "costing") {
+        renderMaterialsTable();
+      }
+      if (tabName === "gaji") {
+        populateEmployeeOptions();
+        calculateSalaryFromDates();
+        renderSalaryHistoryTable();
+      }
+      if (tabName === "errorLog") {
+        renderErrorLogTable();
+      }
+    }
+  </script>
 </head>
 
 <body class="bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 min-h-screen font-sans transition-colors">
@@ -735,1688 +1047,1488 @@
     </div>
   </div>
 
-<script>
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxqnpjgoLlPVZDSjvAy5Amy0YZl1Vf9AG9wwxPqsXjut1i96DzUqySM3OrBIPEhQDvwUQ/exec";
-
-let cart = [];
-let salesData = [];
-let materialsData = [];
-let dailyMaterialsData = [];
-let hppHistoryData = [];
-let attendanceData = [];
-let salaryHistoryData = [];
-let errorLogData = [];
-
-let activeFilter = "today";
-let activeExpenseFilter = "today";
-
-let currentRole = null;
-let currentPaymentMethod = "Tunai";
-let barChartInstance = null;
-let topSalesChartInstance = null;
-let expenseChartInstance = null;
-
-window.onerror = function (message, source, lineno, colno, error) {
-  reportErrorToBackend(message, `Line: ${lineno}:${colno} | ${error ? error.stack : ""}`);
-  return false;
-};
-
-function reportErrorToBackend(msg, detail) {
-  if (!APPS_SCRIPT_URL) return;
-  const userName = sessionStorage.getItem("inu_pos_user_name") || "Guest";
-  fetch(APPS_SCRIPT_URL, {
-    method: "POST",
-    body: JSON.stringify({
-      action: "logError",
-      user: `${userName} (${currentRole || "No Role"})`,
-      message: String(msg),
-      detail: String(detail || "-")
-    }),
-    keepalive: true
-  }).catch(() => {});
-}
-
-function formatRupiah(number) {
-  return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(number) || 0);
-}
-
-function escapeHtml(value) {
-  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
-}
-
-function parseDecimal(val) {
-  if (val === null || val === undefined || val === "") return 0;
-  if (typeof val === "number") return val;
-  let str = String(val).trim().replace(",", ".");
-  return parseFloat(str) || 0;
-}
-
-document.addEventListener("DOMContentLoaded", () => {
-  initThemeDefaultLight();
-  setDefaultDates();
-  renderCart();
-  checkStoredLogin();
-});
-
-function initThemeDefaultLight() {
-  document.documentElement.classList.remove("dark");
-  document.getElementById("themeIcon").className = "fa-solid fa-moon";
-}
-
-function toggleTheme() {
-  document.documentElement.classList.toggle("dark");
-  const isDark = document.documentElement.classList.contains("dark");
-  document.getElementById("themeIcon").className = isDark ? "fa-solid fa-sun" : "fa-solid fa-moon";
-}
-
-function setDefaultDates() {
-  const today = new Date();
-  const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-  document.getElementById("salStartDate").value = formatDateInput(firstDay);
-  document.getElementById("salEndDate").value = formatDateInput(today);
-  calculateSalaryFromDates();
-}
-
-function formatDateInput(date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
-function checkStoredLogin() {
-  const savedRole = sessionStorage.getItem("inu_pos_role");
-  const savedName = sessionStorage.getItem("inu_pos_user_name");
-
-  if ((savedRole === "admin" || savedRole === "kasir") && savedName) {
-    currentRole = savedRole;
-    applyPermissions();
-
-    document.getElementById("loginModal").classList.add("hidden");
-    fetchSalesData();
-  } else {
-    document.getElementById("loginModal").classList.remove("hidden");
-  }
-}
-
-async function handleAppLogin() {
-  const pin = document.getElementById("appPinInput").value.trim();
-  const errEl = document.getElementById("loginErrorMsg");
-  errEl.classList.add("hidden");
-
-  if (!pin) {
-    errEl.innerText = "Masukkan PIN terlebih dahulu.";
-    errEl.classList.remove("hidden");
-    return;
-  }
-
-  try {
-    const response = await fetch(`${APPS_SCRIPT_URL}?action=verifyPin&pin=${encodeURIComponent(pin)}`);
-    const res = await response.json();
-
-    if (res.status === "success" && res.valid) {
-      currentRole = res.role;
-      const empName = res.employeeName || (currentRole === "admin" ? "Owner / Admin" : "Kasir Shift");
-
-      sessionStorage.setItem("inu_pos_role", res.role);
-      sessionStorage.setItem("inu_pos_user_name", empName);
-
-      applyPermissions();
-
-      document.getElementById("loginModal").classList.add("hidden");
-
-      fetch(APPS_SCRIPT_URL, {
-        method: "POST",
-        body: JSON.stringify({
-          action: "recordAttendance",
-          type: "clockIn",
-          role: currentRole,
-          employeeName: empName
-        })
-      }).then(r => r.json()).then(att => {
-        if (att && att.attendanceId) {
-          sessionStorage.setItem("active_attendance_id", att.attendanceId);
-        }
-      }).catch(e => reportErrorToBackend("Absen log error", e));
-
-      await fetchSalesData();
-    } else {
-      errEl.innerText = "PIN Salah / Tidak Terdaftar!";
-      errEl.classList.remove("hidden");
-    }
-  } catch (error) {
-    errEl.innerText = "Tidak dapat terhubung ke server.";
-    errEl.classList.remove("hidden");
-    reportErrorToBackend("Login Connection Error", error);
-  }
-}
-
-function applyPermissions() {
-  const badge = document.getElementById("userRoleBadge");
-  const roleNav = document.getElementById("roleNavContainer");
-
-  if (currentRole === "admin") {
-    badge.innerText = "Akses: ADMIN";
-    roleNav.classList.remove("hidden");
-    switchRole("admin");
-  } else {
-    badge.innerText = "Akses: KASIR";
-    roleNav.classList.add("hidden");
-    switchRole("kasir");
-  }
-}
-
-async function logoutApp() {
-  const activeAttId = sessionStorage.getItem("active_attendance_id");
-  const userName = sessionStorage.getItem("inu_pos_user_name") || (currentRole === "admin" ? "Owner / Admin" : "Kasir Shift");
-
-  if (activeAttId || userName) {
-    const payload = JSON.stringify({
-      action: "recordAttendance",
-      type: "clockOut",
-      attendanceId: activeAttId || "",
-      employeeName: userName,
-      role: currentRole
-    });
-
-    try {
-      fetch(APPS_SCRIPT_URL, {
-        method: "POST",
-        body: payload,
-        keepalive: true,
-        headers: { "Content-Type": "text/plain;charset=utf-8" }
-      }).catch(e => console.log("Clockout send error:", e));
-    } catch (e) {
-      console.log("Logout error:", e);
+  <!-- BATCH SCRIPT UTAMA KEDUA -->
+  <script>
+    function addToCart(namaProduk, harga) {
+      const existing = cart.find(item => item.namaProduk === namaProduk);
+      if (existing) { existing.jumlah++; } else { cart.push({ namaProduk, harga, jumlah: 1 }); }
+      renderCart();
     }
 
-    sessionStorage.removeItem("active_attendance_id");
-  }
-
-  sessionStorage.removeItem("inu_pos_role");
-  sessionStorage.removeItem("inu_pos_user_name");
-  currentRole = null;
-  cart = [];
-  renderCart();
-  
-  document.getElementById("appPinInput").value = "";
-  document.getElementById("loginModal").classList.remove("hidden");
-}
-
-window.addEventListener("beforeunload", () => {
-  const activeAttId = sessionStorage.getItem("active_attendance_id");
-  const userName = sessionStorage.getItem("inu_pos_user_name");
-
-  if ((activeAttId || userName) && APPS_SCRIPT_URL) {
-    const payload = JSON.stringify({
-      action: "recordAttendance",
-      type: "clockOut",
-      attendanceId: activeAttId || "",
-      employeeName: userName || "",
-      role: currentRole
-    });
-
-    fetch(APPS_SCRIPT_URL, {
-      method: "POST",
-      body: payload,
-      keepalive: true,
-      headers: { "Content-Type": "text/plain;charset=utf-8" }
-    });
-  }
-});
-
-function switchRole(role) {
-  if (role === "admin" && currentRole !== "admin") {
-    alert("Akses ditolak. Anda tidak memiliki izin Admin.");
-    return;
-  }
-
-  if (role === "admin") {
-    document.getElementById("viewKasir").classList.add("hidden");
-    document.getElementById("viewAdmin").classList.remove("hidden");
-    document.getElementById("btnRoleAdmin").classList.add("bg-white", "dark:bg-slate-700", "text-brand-600", "shadow-sm");
-    document.getElementById("btnRoleKasir").classList.remove("bg-white", "dark:bg-slate-700", "text-brand-600", "shadow-sm");
-    showAdminSubTab("analisis");
-  } else {
-    document.getElementById("viewAdmin").classList.add("hidden");
-    document.getElementById("viewKasir").classList.remove("hidden");
-    document.getElementById("btnRoleKasir").classList.add("bg-white", "dark:bg-slate-700", "text-brand-600", "shadow-sm");
-    document.getElementById("btnRoleAdmin").classList.remove("bg-white", "dark:bg-slate-700", "text-brand-600", "shadow-sm");
-  }
-}
-
-function showAdminSubTab(tabName) {
-  const tabs = ["Analisis", "Pengeluaran", "MasterHpp", "Costing", "Gaji", "Data", "ErrorLog"];
-  tabs.forEach(name => {
-    const el = document.getElementById(`subTab${name}`);
-    const btn = document.getElementById(`tabBtn${name}`);
-    if (el) el.classList.add("hidden");
-    if (btn) btn.className = "px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300";
-  });
-
-  const map = { analisis: "Analisis", pengeluaran: "Pengeluaran", masterHpp: "MasterHpp", costing: "Costing", gaji: "Gaji", data: "Data", errorLog: "ErrorLog" };
-  const selected = map[tabName];
-  if (!selected) return;
-
-  const selectedEl = document.getElementById(`subTab${selected}`);
-  const selectedBtn = document.getElementById(`tabBtn${selected}`);
-  if (selectedEl) selectedEl.classList.remove("hidden");
-  if (selectedBtn) {
-    if (tabName === "errorLog") {
-      selectedBtn.className = "px-4 py-2 rounded-xl text-xs font-bold bg-red-600 text-white shadow-sm";
-    } else {
-      selectedBtn.className = "px-4 py-2 rounded-xl text-xs font-bold bg-brand-600 text-white shadow-sm";
+    function updateCartQty(namaProduk, delta) {
+      const item = cart.find(i => i.namaProduk === namaProduk);
+      if (!item) return;
+      item.jumlah += delta;
+      if (item.jumlah <= 0) cart = cart.filter(i => i.namaProduk !== namaProduk);
+      renderCart();
     }
-  }
 
-  if (tabName === "analisis") renderDashboard();
-  if (tabName === "pengeluaran") renderExpenseAnalysis();
-  if (tabName === "masterHpp" || tabName === "costing") {
-    renderMaterialsTable();
-  }
-  if (tabName === "gaji") {
-    populateEmployeeOptions();
-    calculateSalaryFromDates();
-    renderSalaryHistoryTable();
-  }
-  if (tabName === "errorLog") {
-    renderErrorLogTable();
-  }
-}
+    function clearCart() { cart = []; renderCart(); }
 
-function addToCart(namaProduk, harga) {
-  const existing = cart.find(item => item.namaProduk === namaProduk);
-  if (existing) { existing.jumlah++; } else { cart.push({ namaProduk, harga, jumlah: 1 }); }
-  renderCart();
-}
-
-function updateCartQty(namaProduk, delta) {
-  const item = cart.find(i => i.namaProduk === namaProduk);
-  if (!item) return;
-  item.jumlah += delta;
-  if (item.jumlah <= 0) cart = cart.filter(i => i.namaProduk !== namaProduk);
-  renderCart();
-}
-
-function clearCart() { cart = []; renderCart(); }
-
-function getCartTotal() {
-  return cart.reduce((sum, item) => sum + (Number(item.harga) * Number(item.jumlah)), 0);
-}
-
-function renderCart() {
-  const container = document.getElementById("cartList");
-  container.innerHTML = "";
-  const total = getCartTotal();
-
-  cart.forEach(item => {
-    const subtotal = item.jumlah * item.harga;
-    container.innerHTML += `
-      <div class="flex justify-between items-center p-2 rounded-xl bg-slate-50 dark:bg-slate-800 text-xs">
-        <div>
-          <p class="font-bold">${escapeHtml(item.namaProduk)}</p>
-          <p class="text-[10px] text-slate-400">${formatRupiah(item.harga)} × ${item.jumlah}</p>
-        </div>
-        <div class="flex items-center gap-2">
-          <span class="font-bold">${formatRupiah(subtotal)}</span>
-          <div class="flex items-center bg-slate-200 dark:bg-slate-700 rounded-lg">
-            <button onclick="updateCartQty('${escapeHtml(item.namaProduk)}',-1)" class="px-2 py-0.5">-</button>
-            <span class="px-1 font-bold">${item.jumlah}</span>
-            <button onclick="updateCartQty('${escapeHtml(item.namaProduk)}',1)" class="px-2 py-0.5">+</button>
-          </div>
-        </div>
-      </div>`;
-  });
-
-  document.getElementById("cartTotal").innerText = formatRupiah(total);
-  document.getElementById("btnOpenPayModal").disabled = cart.length === 0;
-}
-
-function setPaymentMethod(method) {
-  currentPaymentMethod = method;
-  const btnTunai = document.getElementById("btnPayTunai");
-  const btnNonTunai = document.getElementById("btnPayNonTunai");
-  const cashInputGroup = document.getElementById("cashInputGroup");
-  const total = getCartTotal();
-
-  if (method === "Tunai") {
-    btnTunai.className = "py-2.5 px-3 rounded-xl border border-brand-500 bg-brand-50 dark:bg-brand-950/50 text-brand-600 dark:text-brand-400 font-bold text-xs flex items-center justify-center gap-2 transition";
-    btnNonTunai.className = "py-2.5 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold text-xs flex items-center justify-center gap-2 transition";
-    cashInputGroup.classList.remove("hidden");
-    document.getElementById("modalPayAmount").value = total;
-    calcModalChange();
-  } else {
-    btnNonTunai.className = "py-2.5 px-3 rounded-xl border border-brand-500 bg-brand-50 dark:bg-brand-950/50 text-brand-600 dark:text-brand-400 font-bold text-xs flex items-center justify-center gap-2 transition";
-    btnTunai.className = "py-2.5 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold text-xs flex items-center justify-center gap-2 transition";
-    cashInputGroup.classList.add("hidden");
-    document.getElementById("modalPayAmount").value = total;
-  }
-}
-
-function openPaymentModal() {
-  if (!cart.length) return;
-  const total = getCartTotal();
-  document.getElementById("modalTotalBill").innerText = formatRupiah(total);
-  const summary = document.getElementById("modalCartSummary");
-  summary.innerHTML = "";
-
-  cart.forEach(item => {
-    summary.innerHTML += `
-      <div class="flex justify-between text-xs font-medium">
-        <span>${escapeHtml(item.namaProduk)} (${item.jumlah}x)</span>
-        <span>${formatRupiah(item.harga * item.jumlah)}</span>
-      </div>`;
-  });
-
-  const quick = document.getElementById("quickMoneyButtons");
-  const rounded10 = Math.ceil(total / 10000) * 10000;
-  const rounded50 = Math.ceil(total / 50000) * 50000;
-
-  quick.innerHTML = `
-    <button onclick="setModalPayAmount(${total})" class="px-2.5 py-1 bg-slate-200 dark:bg-slate-700 text-[11px] font-bold rounded-lg">Uang Pas</button>
-    <button onclick="setModalPayAmount(${rounded10})" class="px-2.5 py-1 bg-slate-200 dark:bg-slate-700 text-[11px] font-bold rounded-lg">${formatRupiah(rounded10)}</button>
-    <button onclick="setModalPayAmount(${rounded50})" class="px-2.5 py-1 bg-slate-200 dark:bg-slate-700 text-[11px] font-bold rounded-lg">${formatRupiah(rounded50)}</button>
-    <button onclick="setModalPayAmount(100000)" class="px-2.5 py-1 bg-slate-200 dark:bg-slate-700 text-[11px] font-bold rounded-lg">Rp 100.000</button>`;
-
-  setPaymentMethod("Tunai");
-  document.getElementById("paymentModal").classList.remove("hidden");
-}
-
-function setModalPayAmount(value) {
-  document.getElementById("modalPayAmount").value = value;
-  calcModalChange();
-}
-
-function calcModalChange() {
-  const total = getCartTotal();
-  const pay = Number(document.getElementById("modalPayAmount").value) || 0;
-  const change = pay - total;
-  const el = document.getElementById("modalChangeAmount");
-
-  if (change >= 0) {
-    el.innerText = formatRupiah(change);
-    el.className = "font-black text-base text-emerald-600";
-  } else {
-    el.innerText = "Kurang!";
-    el.className = "font-black text-base text-red-500";
-  }
-}
-
-function closePaymentModal() {
-  document.getElementById("paymentModal").classList.add("hidden");
-}
-
-async function submitTransaction() {
-  const total = getCartTotal();
-  const pay = currentPaymentMethod === "Tunai" ? Number(document.getElementById("modalPayAmount").value) || 0 : total;
-  if (pay < total) { alert("Nominal pembayaran masih kurang."); return; }
-
-  const payload = {
-    action: "sale",
-    metodePembayaran: currentPaymentMethod,
-    items: cart.map(item => ({ namaProduk: item.namaProduk, jumlah: item.jumlah })),
-    uangBayar: pay
-  };
-
-  const btn = document.getElementById("btnConfirmPay");
-  btn.disabled = true;
-  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
-
-  try {
-    const response = await fetch(APPS_SCRIPT_URL, { method: "POST", body: JSON.stringify(payload) });
-    const data = await response.json();
-
-    if (data.status === "success") {
-      const transactionId = data.transactionId;
-      const change = currentPaymentMethod === "Tunai" ? (data.kembalian ?? (pay - total)) : 0;
-      closePaymentModal();
-      const shouldPrint = confirm("Transaksi berhasil!\n\nID: " + transactionId + "\nMetode: " + currentPaymentMethod + "\nKembalian: " + formatRupiah(change) + "\n\nCetak struk?");
-      if (shouldPrint) { printReceipt(transactionId, cart, total, pay, change, currentPaymentMethod); }
-      clearCart();
-      await fetchSalesData();
-    } else { alert("Gagal: " + (data.message || "Transaksi gagal.")); }
-  } catch (error) {
-    console.error(error);
-    alert("Terjadi kesalahan jaringan.");
-    reportErrorToBackend("submitTransaction error", error);
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '<i class="fa-solid fa-check-circle"></i> Selesaikan Transaksi';
-  }
-}
-
-function printReceipt(trxId, items, total, pay, change, method = "Tunai") {
-  document.getElementById("rcptDate").innerText = new Date().toLocaleString("id-ID");
-  document.getElementById("rcptId").innerText = "ID: " + trxId;
-  document.getElementById("rcptMethod").innerText = method;
-  const container = document.getElementById("rcptItems");
-  container.innerHTML = "";
-
-  items.forEach(item => {
-    container.innerHTML += `
-      <div class="flex justify-between text-[11px]">
-        <span>${escapeHtml(item.namaProduk)} x${item.jumlah}</span>
-        <span>${formatRupiah(item.harga * item.jumlah)}</span>
-      </div>`;
-  });
-
-  document.getElementById("rcptTotal").innerText = formatRupiah(total);
-  document.getElementById("rcptPay").innerText = formatRupiah(pay);
-  document.getElementById("rcptChange").innerText = formatRupiah(change);
-  window.print();
-}
-
-function addMaterialRow() {
-  materialsData.push({ nama: "Bahan Baru", qty: 1, hargaSatuan: 0, biaya: 0 });
-  dailyMaterialsData.push({ nama: "Bahan Baru", qty: 1, hargaSatuan: 0, biaya: 0 });
-  renderMaterialsTable();
-}
-
-function deleteMaterialRow(index) {
-  if (!confirm("Hapus bahan ini dari daftar Master HPP?")) return;
-  materialsData.splice(index, 1);
-  dailyMaterialsData.splice(index, 1);
-  renderMaterialsTable();
-}
-
-function updateMaterialItem(index, key, value) {
-  if (!materialsData[index]) return;
-  if (key === "hargaSatuan" || key === "qty") {
-    materialsData[index][key] = parseDecimal(value);
-  } else {
-    materialsData[index][key] = value;
-  }
-  materialsData[index].biaya = parseDecimal(materialsData[index].qty) * parseDecimal(materialsData[index].hargaSatuan);
-  
-  if (dailyMaterialsData[index]) {
-    dailyMaterialsData[index].hargaSatuan = materialsData[index].hargaSatuan;
-    dailyMaterialsData[index].biaya = parseDecimal(dailyMaterialsData[index].qty) * parseDecimal(dailyMaterialsData[index].hargaSatuan);
-  }
-  
-  renderMaterialsTable();
-}
-
-function updateDailyMaterialItem(index, key, value) {
-  if (!dailyMaterialsData[index]) return;
-  if (key === "qty" || key === "hargaSatuan") {
-    dailyMaterialsData[index][key] = parseDecimal(value);
-  } else {
-    dailyMaterialsData[index][key] = value;
-  }
-  dailyMaterialsData[index].biaya = parseDecimal(dailyMaterialsData[index].qty) * parseDecimal(dailyMaterialsData[index].hargaSatuan);
-  
-  renderMaterialsTable();
-}
-
-function adjustDailyQty(index, delta) {
-  if (!dailyMaterialsData[index]) return;
-  let curr = parseDecimal(dailyMaterialsData[index].qty);
-  let nextVal = Math.max(0, parseFloat((curr + delta).toFixed(2)));
-  updateDailyMaterialItem(index, 'qty', nextVal);
-}
-
-function renderMaterialsTable() {
-  const tbody = document.getElementById("materialsTableBody");
-  const dailyBody = document.getElementById("dailyHppPreviewBody");
-
-  if (tbody) tbody.innerHTML = "";
-  if (dailyBody) dailyBody.innerHTML = "";
-
-  materialsData.forEach((item, index) => {
-    const qty = parseDecimal(item.qty);
-    const harga = parseDecimal(item.hargaSatuan);
-    const subtotal = qty * harga;
-
-    if (tbody) {
-      tbody.innerHTML += `
-        <tr class="border-b border-slate-100 dark:border-slate-800">
-          <td class="py-2.5 px-3">
-            <input type="text" value="${escapeHtml(item.nama)}" onchange="updateMaterialItem(${index},'nama',this.value)" class="w-full px-2 py-1 bg-slate-50 dark:bg-slate-800 font-bold rounded border border-slate-200 dark:border-slate-700 text-xs">
-          </td>
-          <td class="py-2.5 px-3 text-center">
-            <input type="text" value="${String(qty).replace(".", ",")}" disabled class="w-20 text-center px-2 py-1 bg-slate-100 dark:bg-slate-800 text-slate-500 font-bold rounded border border-slate-200 dark:border-slate-700 text-xs cursor-not-allowed">
-          </td>
-          <td class="py-2.5 px-3">
-            <input type="number" min="0" value="${harga}" oninput="updateMaterialItem(${index},'hargaSatuan',this.value)" class="w-full text-right px-2 py-1 bg-slate-50 dark:bg-slate-800 font-bold rounded border border-slate-200 dark:border-slate-700 text-xs">
-          </td>
-          <td class="py-2.5 px-3 text-right font-black text-brand-600">${formatRupiah(subtotal)}</td>
-          <td class="py-2.5 px-3 text-center">
-            <button onclick="deleteMaterialRow(${index})" class="text-red-500 hover:text-red-700 p-1"><i class="fa-solid fa-trash"></i></button>
-          </td>
-        </tr>`;
+    function getCartTotal() {
+      return cart.reduce((sum, item) => sum + (Number(item.harga) * Number(item.jumlah)), 0);
     }
-  });
 
-  let dailyTotalBiaya = 0;
-  if (dailyBody) {
-    dailyMaterialsData.forEach((item, index) => {
-      const qty = parseDecimal(item.qty);
-      const harga = parseDecimal(item.hargaSatuan);
-      const subtotal = qty * harga;
-      dailyTotalBiaya += subtotal;
+    function renderCart() {
+      const container = document.getElementById("cartList");
+      if (!container) return;
+      container.innerHTML = "";
+      const total = getCartTotal();
 
-      dailyBody.innerHTML += `
-        <tr class="border-b border-slate-100 dark:border-slate-800">
-          <td class="py-2.5 px-3 font-semibold text-slate-700 dark:text-slate-200">${escapeHtml(item.nama)}</td>
-          <td class="py-2.5 px-3 text-center">
-            <div class="inline-flex items-center bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-300 dark:border-slate-600 p-0.5">
-              <input type="number" step="any" min="0" value="${qty}" oninput="updateDailyMaterialItem(${index},'qty',this.value)" class="show-spinners w-16 text-center bg-transparent font-bold text-brand-600 dark:text-brand-400 text-xs focus:outline-none">
-              <div class="flex flex-col border-l border-slate-200 dark:border-slate-700 pl-0.5">
-                <button onclick="adjustDailyQty(${index}, 0.5)" class="px-1 text-[9px] hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300">▲</button>
-                <button onclick="adjustDailyQty(${index}, -0.5)" class="px-1 text-[9px] hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300">▼</button>
+      cart.forEach(item => {
+        const subtotal = item.jumlah * item.harga;
+        container.innerHTML += `
+          <div class="flex justify-between items-center p-2 rounded-xl bg-slate-50 dark:bg-slate-800 text-xs">
+            <div>
+              <p class="font-bold">${escapeHtml(item.namaProduk)}</p>
+              <p class="text-[10px] text-slate-400">${formatRupiah(item.harga)} × ${item.jumlah}</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="font-bold">${formatRupiah(subtotal)}</span>
+              <div class="flex items-center bg-slate-200 dark:bg-slate-700 rounded-lg">
+                <button onclick="updateCartQty('${escapeHtml(item.namaProduk)}',-1)" class="px-2 py-0.5">-</button>
+                <span class="px-1 font-bold">${item.jumlah}</span>
+                <button onclick="updateCartQty('${escapeHtml(item.namaProduk)}',1)" class="px-2 py-0.5">+</button>
               </div>
             </div>
-          </td>
-          <td class="py-2.5 px-3 text-right text-slate-600 dark:text-slate-400">${formatRupiah(harga)}</td>
-          <td class="py-2.5 px-3 text-right font-black text-brand-600">${formatRupiah(subtotal)}</td>
-        </tr>`;
-    });
+          </div>`;
+      });
 
-    const dailyPreview = document.getElementById("dailyHppCostPreview");
-    if (dailyPreview) dailyPreview.innerText = formatRupiah(dailyTotalBiaya);
-  }
-}
+      const totalEl = document.getElementById("cartTotal");
+      if (totalEl) totalEl.innerText = formatRupiah(total);
+      const btnPay = document.getElementById("btnOpenPayModal");
+      if (btnPay) btnPay.disabled = cart.length === 0;
+    }
 
-async function saveMasterMaterialsPermanently() {
-  if (!materialsData.length) { alert("Master HPP masih kosong."); return; }
-  for (const item of materialsData) {
-    if (!String(item.nama || "").trim()) { alert("Nama bahan tidak boleh kosong."); return; }
-  }
-  if (!confirm("Simpan daftar ini sebagai Master HPP permanen?")) return;
+    function setPaymentMethod(method) {
+      currentPaymentMethod = method;
+      const btnTunai = document.getElementById("btnPayTunai");
+      const btnNonTunai = document.getElementById("btnPayNonTunai");
+      const cashInputGroup = document.getElementById("cashInputGroup");
+      const total = getCartTotal();
 
-  const btn = document.getElementById("btnSaveMasterHPP");
-  btn.disabled = true;
-  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
+      if (method === "Tunai") {
+        if (btnTunai) btnTunai.className = "py-2.5 px-3 rounded-xl border border-brand-500 bg-brand-50 dark:bg-brand-950/50 text-brand-600 dark:text-brand-400 font-bold text-xs flex items-center justify-center gap-2 transition";
+        if (btnNonTunai) btnNonTunai.className = "py-2.5 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold text-xs flex items-center justify-center gap-2 transition";
+        if (cashInputGroup) cashInputGroup.classList.remove("hidden");
+        const payAmountInput = document.getElementById("modalPayAmount");
+        if (payAmountInput) payAmountInput.value = total;
+        calcModalChange();
+      } else {
+        if (btnNonTunai) btnNonTunai.className = "py-2.5 px-3 rounded-xl border border-brand-500 bg-brand-50 dark:bg-brand-950/50 text-brand-600 dark:text-brand-400 font-bold text-xs flex items-center justify-center gap-2 transition";
+        if (btnTunai) btnTunai.className = "py-2.5 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold text-xs flex items-center justify-center gap-2 transition";
+        if (cashInputGroup) cashInputGroup.classList.add("hidden");
+        const payAmountInput = document.getElementById("modalPayAmount");
+        if (payAmountInput) payAmountInput.value = total;
+      }
+    }
 
-  try {
-    const payload = { action: "updateMasterHPP", masterMaterials: materialsData.map(item => ({ nama: String(item.nama || "").trim(), qty: parseDecimal(item.qty), hargaSatuan: parseDecimal(item.hargaSatuan) })) };
-    const response = await fetch(APPS_SCRIPT_URL, { method: "POST", body: JSON.stringify(payload) });
-    const data = await response.json();
-    if (data.status === "success") {
-      alert("Master HPP berhasil disimpan.");
-      await fetchSalesData();
-    } else { alert("Gagal menyimpan Master HPP:\n" + data.message); }
-  } catch (error) {
-    console.error(error);
-    alert("Terjadi kesalahan jaringan.");
-    reportErrorToBackend("saveMasterMaterials error", error);
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Simpan Master HPP';
-  }
-}
+    function openPaymentModal() {
+      if (!cart.length) return;
+      const total = getCartTotal();
+      const totalBillEl = document.getElementById("modalTotalBill");
+      if (totalBillEl) totalBillEl.innerText = formatRupiah(total);
+      const summary = document.getElementById("modalCartSummary");
+      if (summary) summary.innerHTML = "";
 
-async function saveHPPToBackend() {
-  if (!dailyMaterialsData.length) { alert("Data belanja HPP harian masih kosong."); return; }
-  const btn = document.getElementById("btnSaveHPPBackend");
-  btn.disabled = true;
-  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
+      cart.forEach(item => {
+        if (summary) {
+          summary.innerHTML += `
+            <div class="flex justify-between text-xs font-medium">
+              <span>${escapeHtml(item.namaProduk)} (${item.jumlah}x)</span>
+              <span>${formatRupiah(item.harga * item.jumlah)}</span>
+            </div>`;
+        }
+      });
 
-  try {
-    const payload = { action: "saveHPP", materials: dailyMaterialsData.map(item => ({ nama: String(item.nama || "").trim(), qty: parseDecimal(item.qty), biaya: parseDecimal(item.qty) * parseDecimal(item.hargaSatuan) })) };
-    const response = await fetch(APPS_SCRIPT_URL, { method: "POST", body: JSON.stringify(payload) });
-    const data = await response.json();
-    if (data.status === "success") { alert("Belanja HPP hari ini berhasil dicatat."); }
-    else { alert("Gagal:\n" + data.message); }
-  } catch (error) {
-    console.error(error);
-    alert("Terjadi kesalahan jaringan.");
-    reportErrorToBackend("saveHPPToBackend error", error);
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i> Catat Belanja Hari Ini';
-  }
-}
+      const quick = document.getElementById("quickMoneyButtons");
+      const rounded10 = Math.ceil(total / 10000) * 10000;
+      const rounded50 = Math.ceil(total / 50000) * 50000;
 
-function calculateCostingSummary() {
-  const dailyTotal = dailyMaterialsData.reduce((sum, item) => sum + (parseDecimal(item.qty) * parseDecimal(item.hargaSatuan)), 0);
-  const dailyPreview = document.getElementById("dailyHppCostPreview");
-  if (dailyPreview) dailyPreview.innerText = formatRupiah(dailyTotal);
-}
-
-function getNumericValue(value) {
-  if (typeof value === "number") return value;
-  if (value === null || value === undefined) return 0;
-  return Number(String(value).replace(/[^0-9-]/g, "")) || 0;
-}
-
-async function fetchSalesData() {
-  try {
-    const response = await fetch(`${APPS_SCRIPT_URL}?action=getData`);
-    const data = await response.json();
-    if (data.status !== "success") { console.error(data.message); return; }
-
-    salesData = data.data || [];
-    const masterHpp = data.masterHpp || [];
-    hppHistoryData = data.hppData || [];
-    attendanceData = data.absensiData || [];
-    salaryHistoryData = data.gajiData || [];
-    errorLogData = data.errorData || [];
-
-    materialsData = masterHpp.map(item => {
-      const nama = item["Nama Bahan Baku"] || item["Nama Bahan"] || item.nama || item["Bahan"] || item["Nama"] || Object.values(item)[0] || "Bahan";
-      const qty = parseDecimal(item["Kuantitas Standar Harian"] || item["Qty"] || item.qty || item["Jumlah"] || Object.values(item)[1]) || 1;
-
-      let totalBiaya = parseDecimal(item["Biaya Standar Harian (Rp)"] || item["Biaya Standar Harian"] || item["Biaya"] || item.biaya);
-      let hargaSatuan = parseDecimal(item["Harga Satuan"] || item.hargaSatuan || item["Harga"]);
-
-      if (hargaSatuan === 0 && totalBiaya > 0 && qty > 0) {
-        hargaSatuan = totalBiaya / qty;
-      } else if (totalBiaya === 0 && hargaSatuan > 0) {
-        totalBiaya = hargaSatuan * qty;
+      if (quick) {
+        quick.innerHTML = `
+          <button onclick="setModalPayAmount(${total})" class="px-2.5 py-1 bg-slate-200 dark:bg-slate-700 text-[11px] font-bold rounded-lg">Uang Pas</button>
+          <button onclick="setModalPayAmount(${rounded10})" class="px-2.5 py-1 bg-slate-200 dark:bg-slate-700 text-[11px] font-bold rounded-lg">${formatRupiah(rounded10)}</button>
+          <button onclick="setModalPayAmount(${rounded50})" class="px-2.5 py-1 bg-slate-200 dark:bg-slate-700 text-[11px] font-bold rounded-lg">${formatRupiah(rounded50)}</button>
+          <button onclick="setModalPayAmount(100000)" class="px-2.5 py-1 bg-slate-200 dark:bg-slate-700 text-[11px] font-bold rounded-lg">Rp 100.000</button>`;
       }
 
-      return {
-        nama: nama,
-        qty: qty,
-        hargaSatuan: hargaSatuan,
-        biaya: totalBiaya
+      setPaymentMethod("Tunai");
+      const modal = document.getElementById("paymentModal");
+      if (modal) modal.classList.remove("hidden");
+    }
+
+    function setModalPayAmount(value) {
+      const input = document.getElementById("modalPayAmount");
+      if (input) input.value = value;
+      calcModalChange();
+    }
+
+    function calcModalChange() {
+      const total = getCartTotal();
+      const input = document.getElementById("modalPayAmount");
+      const pay = input ? (Number(input.value) || 0) : 0;
+      const change = pay - total;
+      const el = document.getElementById("modalChangeAmount");
+
+      if (el) {
+        if (change >= 0) {
+          el.innerText = formatRupiah(change);
+          el.className = "font-black text-base text-emerald-600";
+        } else {
+          el.innerText = "Kurang!";
+          el.className = "font-black text-base text-red-500";
+        }
+      }
+    }
+
+    function closePaymentModal() {
+      const modal = document.getElementById("paymentModal");
+      if (modal) modal.classList.add("hidden");
+    }
+
+    async function submitTransaction() {
+      const total = getCartTotal();
+      const input = document.getElementById("modalPayAmount");
+      const pay = currentPaymentMethod === "Tunai" ? (input ? (Number(input.value) || 0) : 0) : total;
+      if (pay < total) { alert("Nominal pembayaran masih kurang."); return; }
+
+      const payload = {
+        action: "sale",
+        metodePembayaran: currentPaymentMethod,
+        items: cart.map(item => ({ namaProduk: item.namaProduk, jumlah: item.jumlah })),
+        uangBayar: pay
       };
-    });
 
-    dailyMaterialsData = JSON.parse(JSON.stringify(materialsData));
-
-    renderMaterialsTable();
-    renderDashboard();
-    renderExpenseAnalysis();
-    populateEmployeeOptions();
-    calculateSalaryFromDates();
-    renderSalaryHistoryTable();
-    renderErrorLogTable();
-  } catch (error) {
-    console.error("fetchSalesData error:", error);
-    reportErrorToBackend("fetchSalesData error", error);
-  }
-}
-
-function setExpenseFilter(filter) {
-  activeExpenseFilter = filter;
-  const buttons = { today: "expFilterToday", "7days": "expFilter7Days", month: "expFilterMonth", all: "expFilterAll" };
-
-  Object.values(buttons).forEach(id => {
-    const btn = document.getElementById(id);
-    if (btn) btn.className = "px-3 py-1.5 rounded-lg text-xs font-bold text-slate-500";
-  });
-
-  const activeBtn = document.getElementById(buttons[filter]);
-  if (activeBtn) activeBtn.className = "px-3 py-1.5 rounded-lg text-xs font-bold bg-white dark:bg-slate-700 text-brand-600 shadow-sm";
-
-  const labels = {
-    today: "Menampilkan pengeluaran hari ini",
-    "7days": "Menampilkan pengeluaran 7 hari terakhir",
-    month: "Menampilkan pengeluaran bulan ini",
-    all: "Menampilkan seluruh pengeluaran"
-  };
-  document.getElementById("expenseFilterLabel").innerText = labels[filter];
-
-  renderExpenseAnalysis();
-}
-
-function renderExpenseAnalysis() {
-  const now = new Date();
-  const currentMonth = now.getMonth();
-  const currentYear = now.getFullYear();
-
-  let totalExpense = 0;
-  let topExpenseItem = "-";
-  let topCost = 0;
-
-  const expenseMap = {};
-  materialsData.forEach(item => {
-    expenseMap[item.nama] = {
-      nama: item.nama,
-      qty: 0,
-      biaya: 0
-    };
-  });
-
-  if (activeExpenseFilter === "today") {
-    dailyMaterialsData.forEach(item => {
-      const qty = parseDecimal(item.qty);
-      const price = parseDecimal(item.hargaSatuan);
-      const subtotal = qty * price;
-
-      if (!expenseMap[item.nama]) {
-        expenseMap[item.nama] = { nama: item.nama, qty: 0, biaya: 0 };
-      }
-      expenseMap[item.nama].qty += qty;
-      expenseMap[item.nama].biaya += subtotal;
-    });
-  } else {
-    const sourceLogs = (hppHistoryData && hppHistoryData.length > 0) ? hppHistoryData : salesData;
-
-    sourceLogs.forEach(row => {
-      const rawDate = row["Tanggal & Waktu"] || row["Waktu"] || row["Tanggal"] || row["Date"] || row["Timestamp"] || Object.values(row)[1] || Object.values(row)[0] || "";
-      const date = parseTransactionDate(rawDate);
-
-      let isMatch = false;
-
-      if (date && !isNaN(date.getTime())) {
-        if (activeExpenseFilter === "7days") {
-          const diffDays = (now.getTime() - date.getTime()) / (1000 * 3600 * 24);
-          isMatch = diffDays >= -1 && diffDays <= 7;
-        } else if (activeExpenseFilter === "month") {
-          isMatch = (date.getMonth() === currentMonth && date.getFullYear() === currentYear);
-        } else if (activeExpenseFilter === "all") {
-          isMatch = true;
-        }
-      } else if (rawDate) {
-        const rawStr = String(rawDate).trim();
-        const mPad = String(currentMonth + 1).padStart(2, '0');
-        if (activeExpenseFilter === "month" || activeExpenseFilter === "7days") {
-          isMatch = rawStr.includes(`/${mPad}/${currentYear}`) || rawStr.includes(`-${mPad}-${currentYear}`);
-        } else if (activeExpenseFilter === "all") {
-          isMatch = true;
-        }
+      const btn = document.getElementById("btnConfirmPay");
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
       }
 
-      if (isMatch) {
-        const itemNama = row["Nama Bahan Baku"] || row["Nama Bahan"] || row["Bahan"] || row["Nama Produk"] || row["Produk"] || row["Nama"] || "";
-        const qty = parseDecimal(row["Kuantitas Standar Harian"] || row["Qty"] || row["Jumlah"] || row["Kuantitas"]);
-        let subtotal = parseDecimal(row["Biaya Standar Harian (Rp)"] || row["Biaya Standar Harian"] || row["Biaya"] || row["Total Biaya"] || row["Total Harga"] || row["Total"]);
+      try {
+        const response = await fetch(APPS_SCRIPT_URL, { method: "POST", body: JSON.stringify(payload) });
+        const data = await response.json();
 
-        if (subtotal === 0 && qty > 0) {
-          const masterItem = materialsData.find(m => m.nama === itemNama);
-          if (masterItem) {
-            subtotal = qty * masterItem.hargaSatuan;
+        if (data.status === "success") {
+          const transactionId = data.transactionId;
+          const change = currentPaymentMethod === "Tunai" ? (data.kembalian ?? (pay - total)) : 0;
+          closePaymentModal();
+          const shouldPrint = confirm("Transaksi berhasil!\n\nID: " + transactionId + "\nMetode: " + currentPaymentMethod + "\nKembalian: " + formatRupiah(change) + "\n\nCetak struk?");
+          if (shouldPrint) { printReceipt(transactionId, cart, total, pay, change, currentPaymentMethod); }
+          clearCart();
+          await fetchSalesData();
+        } else { alert("Gagal: " + (data.message || "Transaksi gagal.")); }
+      } catch (error) {
+        console.error(error);
+        alert("Terjadi kesalahan jaringan.");
+        reportErrorToBackend("submitTransaction error", error);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<i class="fa-solid fa-check-circle"></i> Selesaikan Transaksi';
+        }
+      }
+    }
+
+    function printReceipt(trxId, items, total, pay, change, method = "Tunai") {
+      const dateEl = document.getElementById("rcptDate");
+      const idEl = document.getElementById("rcptId");
+      const methodEl = document.getElementById("rcptMethod");
+      if (dateEl) dateEl.innerText = new Date().toLocaleString("id-ID");
+      if (idEl) idEl.innerText = "ID: " + trxId;
+      if (methodEl) methodEl.innerText = method;
+
+      const container = document.getElementById("rcptItems");
+      if (container) {
+        container.innerHTML = "";
+        items.forEach(item => {
+          container.innerHTML += `
+            <div class="flex justify-between text-[11px]">
+              <span>${escapeHtml(item.namaProduk)} x${item.jumlah}</span>
+              <span>${formatRupiah(item.harga * item.jumlah)}</span>
+            </div>`;
+        });
+      }
+
+      const totalEl = document.getElementById("rcptTotal");
+      const payEl = document.getElementById("rcptPay");
+      const changeEl = document.getElementById("rcptChange");
+      if (totalEl) totalEl.innerText = formatRupiah(total);
+      if (payEl) payEl.innerText = formatRupiah(pay);
+      if (changeEl) changeEl.innerText = formatRupiah(change);
+
+      window.print();
+    }
+
+    function addMaterialRow() {
+      materialsData.push({ nama: "Bahan Baru", qty: 1, hargaSatuan: 0, biaya: 0 });
+      dailyMaterialsData.push({ nama: "Bahan Baru", qty: 1, hargaSatuan: 0, biaya: 0 });
+      renderMaterialsTable();
+    }
+
+    function deleteMaterialRow(index) {
+      if (!confirm("Hapus bahan ini dari daftar Master HPP?")) return;
+      materialsData.splice(index, 1);
+      dailyMaterialsData.splice(index, 1);
+      renderMaterialsTable();
+    }
+
+    function updateMaterialItem(index, key, value) {
+      if (!materialsData[index]) return;
+      if (key === "hargaSatuan" || key === "qty") {
+        materialsData[index][key] = parseDecimal(value);
+      } else {
+        materialsData[index][key] = value;
+      }
+      materialsData[index].biaya = parseDecimal(materialsData[index].qty) * parseDecimal(materialsData[index].hargaSatuan);
+      
+      if (dailyMaterialsData[index]) {
+        dailyMaterialsData[index].hargaSatuan = materialsData[index].hargaSatuan;
+        dailyMaterialsData[index].biaya = parseDecimal(dailyMaterialsData[index].qty) * parseDecimal(dailyMaterialsData[index].hargaSatuan);
+      }
+      
+      renderMaterialsTable();
+    }
+
+    function updateDailyMaterialItem(index, key, value) {
+      if (!dailyMaterialsData[index]) return;
+      if (key === "qty" || key === "hargaSatuan") {
+        dailyMaterialsData[index][key] = parseDecimal(value);
+      } else {
+        dailyMaterialsData[index][key] = value;
+      }
+      dailyMaterialsData[index].biaya = parseDecimal(dailyMaterialsData[index].qty) * parseDecimal(dailyMaterialsData[index].hargaSatuan);
+      
+      renderMaterialsTable();
+    }
+
+    function adjustDailyQty(index, delta) {
+      if (!dailyMaterialsData[index]) return;
+      let curr = parseDecimal(dailyMaterialsData[index].qty);
+      let nextVal = Math.max(0, parseFloat((curr + delta).toFixed(2)));
+      updateDailyMaterialItem(index, 'qty', nextVal);
+    }
+
+    function renderMaterialsTable() {
+      const tbody = document.getElementById("materialsTableBody");
+      const dailyBody = document.getElementById("dailyHppPreviewBody");
+
+      if (tbody) tbody.innerHTML = "";
+      if (dailyBody) dailyBody.innerHTML = "";
+
+      materialsData.forEach((item, index) => {
+        const qty = parseDecimal(item.qty);
+        const harga = parseDecimal(item.hargaSatuan);
+        const subtotal = qty * harga;
+
+        if (tbody) {
+          tbody.innerHTML += `
+            <tr class="border-b border-slate-100 dark:border-slate-800">
+              <td class="py-2.5 px-3">
+                <input type="text" value="${escapeHtml(item.nama)}" onchange="updateMaterialItem(${index},'nama',this.value)" class="w-full px-2 py-1 bg-slate-50 dark:bg-slate-800 font-bold rounded border border-slate-200 dark:border-slate-700 text-xs">
+              </td>
+              <td class="py-2.5 px-3 text-center">
+                <input type="text" value="${String(qty).replace(".", ",")}" disabled class="w-20 text-center px-2 py-1 bg-slate-100 dark:bg-slate-800 text-slate-500 font-bold rounded border border-slate-200 dark:border-slate-700 text-xs cursor-not-allowed">
+              </td>
+              <td class="py-2.5 px-3">
+                <input type="number" min="0" value="${harga}" oninput="updateMaterialItem(${index},'hargaSatuan',this.value)" class="w-full text-right px-2 py-1 bg-slate-50 dark:bg-slate-800 font-bold rounded border border-slate-200 dark:border-slate-700 text-xs">
+              </td>
+              <td class="py-2.5 px-3 text-right font-black text-brand-600">${formatRupiah(subtotal)}</td>
+              <td class="py-2.5 px-3 text-center">
+                <button onclick="deleteMaterialRow(${index})" class="text-red-500 hover:text-red-700 p-1"><i class="fa-solid fa-trash"></i></button>
+              </td>
+            </tr>`;
+        }
+      });
+
+      let dailyTotalBiaya = 0;
+      if (dailyBody) {
+        dailyMaterialsData.forEach((item, index) => {
+          const qty = parseDecimal(item.qty);
+          const harga = parseDecimal(item.hargaSatuan);
+          const subtotal = qty * harga;
+          dailyTotalBiaya += subtotal;
+
+          dailyBody.innerHTML += `
+            <tr class="border-b border-slate-100 dark:border-slate-800">
+              <td class="py-2.5 px-3 font-semibold text-slate-700 dark:text-slate-200">${escapeHtml(item.nama)}</td>
+              <td class="py-2.5 px-3 text-center">
+                <div class="inline-flex items-center bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-300 dark:border-slate-600 p-0.5">
+                  <input type="number" step="any" min="0" value="${qty}" oninput="updateDailyMaterialItem(${index},'qty',this.value)" class="show-spinners w-16 text-center bg-transparent font-bold text-brand-600 dark:text-brand-400 text-xs focus:outline-none">
+                  <div class="flex flex-col border-l border-slate-200 dark:border-slate-700 pl-0.5">
+                    <button onclick="adjustDailyQty(${index}, 0.5)" class="px-1 text-[9px] hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300">▲</button>
+                    <button onclick="adjustDailyQty(${index}, -0.5)" class="px-1 text-[9px] hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300">▼</button>
+                  </div>
+                </div>
+              </td>
+              <td class="py-2.5 px-3 text-right text-slate-600 dark:text-slate-400">${formatRupiah(harga)}</td>
+              <td class="py-2.5 px-3 text-right font-black text-brand-600">${formatRupiah(subtotal)}</td>
+            </tr>`;
+        });
+
+        const dailyPreview = document.getElementById("dailyHppCostPreview");
+        if (dailyPreview) dailyPreview.innerText = formatRupiah(dailyTotalBiaya);
+      }
+    }
+
+    async function saveMasterMaterialsPermanently() {
+      if (!materialsData.length) { alert("Master HPP masih kosong."); return; }
+      for (const item of materialsData) {
+        if (!String(item.nama || "").trim()) { alert("Nama bahan tidak boleh kosong."); return; }
+      }
+      if (!confirm("Simpan daftar ini sebagai Master HPP permanen?")) return;
+
+      const btn = document.getElementById("btnSaveMasterHPP");
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
+      }
+
+      try {
+        const payload = { action: "updateMasterHPP", masterMaterials: materialsData.map(item => ({ nama: String(item.nama || "").trim(), qty: parseDecimal(item.qty), hargaSatuan: parseDecimal(item.hargaSatuan) })) };
+        const response = await fetch(APPS_SCRIPT_URL, { method: "POST", body: JSON.stringify(payload) });
+        const data = await response.json();
+        if (data.status === "success") {
+          alert("Master HPP berhasil disimpan.");
+          await fetchSalesData();
+        } else { alert("Gagal menyimpan Master HPP:\n" + data.message); }
+      } catch (error) {
+        console.error(error);
+        alert("Terjadi kesalahan jaringan.");
+        reportErrorToBackend("saveMasterMaterials error", error);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Simpan Master HPP';
+        }
+      }
+    }
+
+    async function saveHPPToBackend() {
+      if (!dailyMaterialsData.length) { alert("Data belanja HPP harian masih kosong."); return; }
+      const btn = document.getElementById("btnSaveHPPBackend");
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
+      }
+
+      try {
+        const payload = { action: "saveHPP", materials: dailyMaterialsData.map(item => ({ nama: String(item.nama || "").trim(), qty: parseDecimal(item.qty), biaya: parseDecimal(item.qty) * parseDecimal(item.hargaSatuan) })) };
+        const response = await fetch(APPS_SCRIPT_URL, { method: "POST", body: JSON.stringify(payload) });
+        const data = await response.json();
+        if (data.status === "success") { alert("Belanja HPP hari ini berhasil dicatat."); }
+        else { alert("Gagal:\n" + data.message); }
+      } catch (error) {
+        console.error(error);
+        alert("Terjadi kesalahan jaringan.");
+        reportErrorToBackend("saveHPPToBackend error", error);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i> Catat Belanja Hari Ini';
+        }
+      }
+    }
+
+    function getNumericValue(value) {
+      if (typeof value === "number") return value;
+      if (value === null || value === undefined) return 0;
+      return Number(String(value).replace(/[^0-9-]/g, "")) || 0;
+    }
+
+    async function fetchSalesData() {
+      try {
+        const response = await fetch(`${APPS_SCRIPT_URL}?action=getData`);
+        const data = await response.json();
+        if (data.status !== "success") { console.error(data.message); return; }
+
+        salesData = data.data || [];
+        const masterHpp = data.masterHpp || [];
+        hppHistoryData = data.hppData || [];
+        attendanceData = data.absensiData || [];
+        salaryHistoryData = data.gajiData || [];
+        errorLogData = data.errorData || [];
+
+        materialsData = masterHpp.map(item => {
+          const nama = item["Nama Bahan Baku"] || item["Nama Bahan"] || item.nama || item["Bahan"] || item["Nama"] || Object.values(item)[0] || "Bahan";
+          const qty = parseDecimal(item["Kuantitas Standar Harian"] || item["Qty"] || item.qty || item["Jumlah"] || Object.values(item)[1]) || 1;
+
+          let totalBiaya = parseDecimal(item["Biaya Standar Harian (Rp)"] || item["Biaya Standar Harian"] || item["Biaya"] || item.biaya);
+          let hargaSatuan = parseDecimal(item["Harga Satuan"] || item.hargaSatuan || item["Harga"]);
+
+          if (hargaSatuan === 0 && totalBiaya > 0 && qty > 0) {
+            hargaSatuan = totalBiaya / qty;
+          } else if (totalBiaya === 0 && hargaSatuan > 0) {
+            totalBiaya = hargaSatuan * qty;
           }
-        }
 
-        if (itemNama && expenseMap[itemNama]) {
-          expenseMap[itemNama].qty += qty;
-          expenseMap[itemNama].biaya += subtotal;
-        } else if (itemNama && subtotal > 0) {
-          expenseMap[itemNama] = {
-            nama: itemNama,
+          return {
+            nama: nama,
             qty: qty,
-            biaya: subtotal
+            hargaSatuan: hargaSatuan,
+            biaya: totalBiaya
           };
-        }
+        });
+
+        dailyMaterialsData = JSON.parse(JSON.stringify(materialsData));
+
+        renderMaterialsTable();
+        renderDashboard();
+        renderExpenseAnalysis();
+        populateEmployeeOptions();
+        calculateSalaryFromDates();
+        renderSalaryHistoryTable();
+        renderErrorLogTable();
+      } catch (error) {
+        console.error("fetchSalesData error:", error);
+        reportErrorToBackend("fetchSalesData error", error);
       }
-    });
-  }
-
-  const names = [];
-  const costValues = [];
-  const qtyValues = [];
-
-  Object.values(expenseMap).forEach(item => {
-    totalExpense += item.biaya;
-    names.push(item.nama);
-    costValues.push(item.biaya);
-    qtyValues.push(item.qty);
-
-    if (item.biaya > topCost && item.biaya > 0) {
-      topCost = item.biaya;
-      topExpenseItem = `${item.nama} (${formatRupiah(item.biaya)})`;
     }
-  });
 
-  const totalCostEl = document.getElementById("expenseTotalCost");
-  if (totalCostEl) totalCostEl.innerText = formatRupiah(totalExpense);
+    function setExpenseFilter(filter) {
+      activeExpenseFilter = filter;
+      const buttons = { today: "expFilterToday", "7days": "expFilter7Days", month: "expFilterMonth", all: "expFilterAll" };
 
-  const totalItemsEl = document.getElementById("expenseTotalItems");
-  if (totalItemsEl) totalItemsEl.innerText = `${Object.keys(expenseMap).length} Jenis`;
+      Object.values(buttons).forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.className = "px-3 py-1.5 rounded-lg text-xs font-bold text-slate-500";
+      });
 
-  const topItemEl = document.getElementById("expenseTopItem");
-  if (topItemEl) topItemEl.innerText = topExpenseItem;
+      const activeBtn = document.getElementById(buttons[filter]);
+      if (activeBtn) activeBtn.className = "px-3 py-1.5 rounded-lg text-xs font-bold bg-white dark:bg-slate-700 text-brand-600 shadow-sm";
 
-  const expCanvas = document.getElementById("expenseBarChart");
-  if (!expCanvas) return;
+      const labels = {
+        today: "Menampilkan pengeluaran hari ini",
+        "7days": "Menampilkan pengeluaran 7 hari terakhir",
+        month: "Menampilkan pengeluaran bulan ini",
+        all: "Menampilkan seluruh pengeluaran"
+      };
+      const labelEl = document.getElementById("expenseFilterLabel");
+      if (labelEl) labelEl.innerText = labels[filter];
 
-  if (expenseChartInstance) expenseChartInstance.destroy();
+      renderExpenseAnalysis();
+    }
 
-  expenseChartInstance = new Chart(expCanvas.getContext("2d"), {
-    type: "bar",
-    data: {
-      labels: names,
-      datasets: [{
-        label: "BIAYA",
-        data: costValues,
-        backgroundColor: "#ef4444",
-        borderRadius: 6,
-        barPercentage: 0.45
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: function(context) {
-              const itemIndex = context.dataIndex;
-              return [
-                ` BIAYA: ${formatRupiah(context.raw)}`,
-                ` QTY: ${qtyValues[itemIndex]}`
-              ];
+    function renderExpenseAnalysis() {
+      const now = new Date();
+      const currentMonth = now.getMonth();
+      const currentYear = now.getFullYear();
+
+      let totalExpense = 0;
+      let topExpenseItem = "-";
+      let topCost = 0;
+
+      const expenseMap = {};
+      materialsData.forEach(item => {
+        expenseMap[item.nama] = {
+          nama: item.nama,
+          qty: 0,
+          biaya: 0
+        };
+      });
+
+      if (activeExpenseFilter === "today") {
+        dailyMaterialsData.forEach(item => {
+          const qty = parseDecimal(item.qty);
+          const price = parseDecimal(item.hargaSatuan);
+          const subtotal = qty * price;
+
+          if (!expenseMap[item.nama]) {
+            expenseMap[item.nama] = { nama: item.nama, qty: 0, biaya: 0 };
+          }
+          expenseMap[item.nama].qty += qty;
+          expenseMap[item.nama].biaya += subtotal;
+        });
+      } else {
+        const sourceLogs = (hppHistoryData && hppHistoryData.length > 0) ? hppHistoryData : salesData;
+
+        sourceLogs.forEach(row => {
+          const rawDate = row["Tanggal & Waktu"] || row["Waktu"] || row["Tanggal"] || row["Date"] || row["Timestamp"] || Object.values(row)[1] || Object.values(row)[0] || "";
+          const date = parseTransactionDate(rawDate);
+
+          let isMatch = false;
+
+          if (date && !isNaN(date.getTime())) {
+            if (activeExpenseFilter === "7days") {
+              const diffDays = (now.getTime() - date.getTime()) / (1000 * 3600 * 24);
+              isMatch = diffDays >= -1 && diffDays <= 7;
+            } else if (activeExpenseFilter === "month") {
+              isMatch = (date.getMonth() === currentMonth && date.getFullYear() === currentYear);
+            } else if (activeExpenseFilter === "all") {
+              isMatch = true;
+            }
+          } else if (rawDate) {
+            const rawStr = String(rawDate).trim();
+            const mPad = String(currentMonth + 1).padStart(2, '0');
+            if (activeExpenseFilter === "month" || activeExpenseFilter === "7days") {
+              isMatch = rawStr.includes(`/${mPad}/${currentYear}`) || rawStr.includes(`-${mPad}-${currentYear}`);
+            } else if (activeExpenseFilter === "all") {
+              isMatch = true;
             }
           }
-        }
-      },
-      scales: {
-        x: { grid: { display: false }, ticks: { display: false } },
-        y: { beginAtZero: true, display: false }
-      }
-    }
-  });
 
-  const trNama = document.getElementById("expTrNamaBahan");
-  const trNilai = document.getElementById("expTrNilaiBiaya");
-  const trQty = document.getElementById("expTrQtyBahan");
+          if (isMatch) {
+            const itemNama = row["Nama Bahan Baku"] || row["Nama Bahan"] || row["Bahan"] || row["Nama Produk"] || row["Produk"] || row["Nama"] || "";
+            const qty = parseDecimal(row["Kuantitas Standar Harian"] || row["Qty"] || row["Jumlah"] || row["Kuantitas"]);
+            let subtotal = parseDecimal(row["Biaya Standar Harian (Rp)"] || row["Biaya Standar Harian"] || row["Biaya"] || row["Total Biaya"] || row["Total Harga"] || row["Total"]);
 
-  if (!trNama || !trNilai || !trQty) return;
+            if (subtotal === 0 && qty > 0) {
+              const masterItem = materialsData.find(m => m.nama === itemNama);
+              if (masterItem) {
+                subtotal = qty * masterItem.hargaSatuan;
+              }
+            }
 
-  trNama.innerHTML = `<td class="p-2 text-left font-extrabold text-slate-600 bg-slate-100 dark:bg-slate-800 w-32">NAMA BAHAN BAKU</td>`;
-  trNilai.innerHTML = `<td class="p-2 text-left font-extrabold text-red-600 bg-slate-50 dark:bg-slate-800/80 w-32">BIAYA</td>`;
-  trQty.innerHTML = `<td class="p-2 text-left font-extrabold text-amber-600 dark:text-amber-400 bg-amber-100/50 dark:bg-amber-900/40 w-32">QTY</td>`;
-
-  names.forEach((p, idx) => {
-    trNama.innerHTML += `<td class="p-2 font-bold uppercase text-slate-700 dark:text-slate-200 border-l border-slate-200 dark:border-slate-700">${escapeHtml(p)}</td>`;
-    trNilai.innerHTML += `<td class="p-2 font-bold text-red-600 border-l border-slate-200 dark:border-slate-700">${formatRupiah(costValues[idx])}</td>`;
-    trQty.innerHTML += `<td class="p-2 font-black text-amber-600 dark:text-amber-400 border-l border-slate-200 dark:border-slate-700">${qtyValues[idx]}</td>`;
-  });
-}
-
-function getRowDateString(row) {
-  if (!row) return "";
-  return row["Tanggal & Waktu"] || row["Waktu"] || row["Tanggal"] || row["Date"] || row["Timestamp"] || Object.values(row)[1] || "";
-}
-
-// PARSE TANGGAL PERSISI DARI STR / DATE OBJECT
-function parseTransactionDate(value) {
-  if (!value) return null;
-  if (value instanceof Date) return value;
-
-  const str = String(value).trim();
-  
-  if (str.includes("/") || str.includes("-")) {
-    const spaceParts = str.split(" ");
-    const delimiter = str.includes("/") ? "/" : "-";
-    const dParts = spaceParts[0].split(delimiter);
-
-    if (dParts.length === 3) {
-      let p1 = parseInt(dParts[0], 10);
-      let p2 = parseInt(dParts[1], 10);
-      let p3 = parseInt(dParts[2], 10);
-
-      if (p1 > 1000) {
-        return new Date(p1, p2 - 1, p3);
-      }
-      if (p3 > 1000) {
-        return new Date(p3, p2 - 1, p1);
-      }
-    }
-  }
-
-  const parsedDirect = new Date(value);
-  return isNaN(parsedDirect.getTime()) ? null : parsedDirect;
-}
-
-function setDashboardFilter(filter) {
-  activeFilter = filter;
-  const buttons = { today: "filterToday", "7days": "filter7Days", month: "filterMonth", all: "filterAll" };
-  Object.values(buttons).forEach(id => {
-    const btn = document.getElementById(id);
-    if (btn) btn.className = "px-3 py-1.5 rounded-lg text-xs font-bold text-slate-500";
-  });
-  const activeBtn = document.getElementById(buttons[filter]);
-  if (activeBtn) activeBtn.className = "px-3 py-1.5 rounded-lg text-xs font-bold bg-white dark:bg-slate-700 text-brand-600 shadow-sm";
-
-  const labels = {
-    today: "Menampilkan data hari ini",
-    "7days": "Menampilkan data 7 hari terakhir (Per Hari)",
-    month: "Menampilkan data bulan ini (Per Minggu)",
-    all: "Menampilkan seluruh data (Per Bulan)"
-  };
-  document.getElementById("dashboardFilterLabel").innerText = labels[filter];
-  renderDashboard();
-}
-
-function filterDataByPeriod(data, filter) {
-  if (filter === "all") return data;
-  const now = new Date();
-  const targetYear = now.getFullYear();
-  const targetMonth = now.getMonth();
-
-  return data.filter(item => {
-    const dateStr = getRowDateString(item);
-    const date = parseTransactionDate(dateStr);
-
-    if (date && !isNaN(date.getTime())) {
-      if (filter === "today") return (date.getDate() === now.getDate() && date.getMonth() === targetMonth && date.getFullYear() === targetYear);
-      if (filter === "7days") {
-        const diffDays = (now.getTime() - date.getTime()) / (1000 * 3600 * 24);
-        return diffDays >= 0 && diffDays <= 7;
-      }
-      if (filter === "month") return (date.getMonth() === targetMonth && date.getFullYear() === targetYear);
-    }
-
-    const rawUpper = String(dateStr).toUpperCase().trim();
-    const mPad = String(targetMonth + 1).padStart(2, '0');
-    const mNoPad = String(targetMonth + 1);
-
-    if (filter === "month") {
-      const monthNames = ["JAN", "FEB", "MAR", "APR", "MEI", "JUN", "JUL", "AGU", "SEP", "OKT", "NOV", "DES"];
-      const fullMonthNames = ["JANUARI", "FEBRUARI", "MARET", "APRIL", "MEI", "JUNI", "JULI", "AGUSTUS", "SEPTEMBER", "OKTOBER", "NOVEMBER", "DESEMBER"];
-      const isNumMatch = (rawUpper.includes(`/${mPad}/${targetYear}`) || rawUpper.includes(`/${mNoPad}/${targetYear}`) || rawUpper.includes(`-${mPad}-${targetYear}`) || rawUpper.includes(`${targetYear}-${mPad}`));
-      const isTextMatch = ((rawUpper.includes(monthNames[targetMonth]) || rawUpper.includes(fullMonthNames[targetMonth])) && rawUpper.includes(String(targetYear)));
-      return isNumMatch || isTextMatch;
-    }
-    if (filter === "today") {
-      const dPad = String(now.getDate()).padStart(2, '0');
-      return rawUpper.includes(`${dPad}/${mPad}/${targetYear}`) || rawUpper.includes(`${now.getDate()}/${mNoPad}/${targetYear}`);
-    }
-    return false;
-  });
-}
-
-function renderDashboard() {
-  const filtered = filterDataByPeriod(salesData, activeFilter);
-  let totalOmset = 0, omsetTunai = 0, omsetNonTunai = 0, totalAyamNasiQty = 0;
-
-  const productSummary = {
-    "Nasi + Ayam": { omset: 0, qty: 0 },
-    "Ayam": { omset: 0, qty: 0 },
-    "Nasi": { omset: 0, qty: 0 },
-    "Saus / Sambal": { omset: 0, qty: 0 }
-  };
-
-  filtered.forEach(row => {
-    const total = getNumericValue(row["Total Harga"] || row["Total"]);
-    const qty = Number(row["Jumlah"] || row["Qty"]) || 0;
-    const product = row["Nama Produk"] || row["Produk"] || "Lainnya";
-    const method = row["Metode Pembayaran"] || row["Metode"] || "Tunai";
-
-    totalOmset += total;
-    if (method.toLowerCase().includes("non")) omsetNonTunai += total;
-    else omsetTunai += total;
-
-    const lowerProd = product.toLowerCase();
-    if (lowerProd === "nasi + ayam" || lowerProd === "ayam" || lowerProd.includes("ayam")) {
-      totalAyamNasiQty += qty;
-    }
-
-    if (!productSummary[product]) productSummary[product] = { omset: 0, qty: 0 };
-    productSummary[product].omset += total;
-    productSummary[product].qty += qty;
-  });
-
-  document.getElementById("dashTotalOmset").innerText = formatRupiah(totalOmset);
-  document.getElementById("dashOmsetTunai").innerText = formatRupiah(omsetTunai);
-  document.getElementById("dashOmsetNonTunai").innerText = formatRupiah(omsetNonTunai);
-  document.getElementById("dashTotalAyamNasiQty").innerText = `${totalAyamNasiQty} pcs`;
-
-  renderCharts(productSummary, filtered);
-  renderTable(salesData);
-}
-
-function renderCharts(productSummary, filteredData) {
-  const barCanvas = document.getElementById("productBarChart");
-  const topSalesCanvas = document.getElementById("topSalesBarChart");
-
-  if (!barCanvas || !topSalesCanvas) return;
-  if (barChartInstance) barChartInstance.destroy();
-  if (topSalesChartInstance) topSalesChartInstance.destroy();
-
-  let timeLabels = [];
-  let timeOmsetValues = [];
-  let timeQtyValues = [];
-  let titleText = "INFORMASI PENJUALAN INU CHICKEN";
-
-  if (activeFilter === "today") {
-    titleText = "PENJUALAN PER MENU (HARI INI)";
-    timeLabels = Object.keys(productSummary);
-    timeOmsetValues = timeLabels.map(p => productSummary[p].omset);
-    timeQtyValues = timeLabels.map(p => productSummary[p].qty);
-  } else if (activeFilter === "7days") {
-    titleText = "TREN PENJUALAN 7 HARI TERAKHIR (PER HARI)";
-    const dayMap = {};
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const dayLabel = d.toLocaleDateString("id-ID", { weekday: "short", day: "numeric" });
-      dayMap[dayLabel] = { omset: 0, qty: 0 };
-    }
-    filteredData.forEach(row => {
-      const d = parseTransactionDate(getRowDateString(row));
-      if (d) {
-        const dayLabel = d.toLocaleDateString("id-ID", { weekday: "short", day: "numeric" });
-        if (dayMap[dayLabel]) {
-          dayMap[dayLabel].omset += getNumericValue(row["Total Harga"] || row["Total"]);
-          dayMap[dayLabel].qty += Number(row["Jumlah"] || row["Qty"]) || 0;
-        }
-      }
-    });
-    timeLabels = Object.keys(dayMap);
-    timeOmsetValues = timeLabels.map(k => dayMap[k].omset);
-    timeQtyValues = timeLabels.map(k => dayMap[k].qty);
-  } else if (activeFilter === "month") {
-    titleText = "TREN PENJUALAN BULAN INI (PER MINGGU)";
-    const weekMap = { "Minggu 1": { omset: 0, qty: 0 }, "Minggu 2": { omset: 0, qty: 0 }, "Minggu 3": { omset: 0, qty: 0 }, "Minggu 4+": { omset: 0, qty: 0 } };
-    filteredData.forEach(row => {
-      const d = parseTransactionDate(getRowDateString(row));
-      if (d) {
-        const dateNum = d.getDate();
-        let wKey = "Minggu 1";
-        if (dateNum > 21) wKey = "Minggu 4+";
-        else if (dateNum > 14) wKey = "Minggu 3";
-        else if (dateNum > 7) wKey = "Minggu 2";
-
-        weekMap[wKey].omset += getNumericValue(row["Total Harga"] || row["Total"]);
-        weekMap[wKey].qty += Number(row["Jumlah"] || row["Qty"]) || 0;
-      }
-    });
-    timeLabels = Object.keys(weekMap);
-    timeOmsetValues = timeLabels.map(k => weekMap[k].omset);
-    timeQtyValues = timeLabels.map(k => weekMap[k].qty);
-  } else if (activeFilter === "all") {
-    titleText = "TREN PENJUALAN KESELURUHAN (PER BULAN)";
-    const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
-    const monthMap = {};
-    filteredData.forEach(row => {
-      const d = parseTransactionDate(getRowDateString(row));
-      if (d) {
-        const mKey = `${monthNames[d.getMonth()]} ${d.getFullYear()}`;
-        if (!monthMap[mKey]) monthMap[mKey] = { omset: 0, qty: 0 };
-        monthMap[mKey].omset += getNumericValue(row["Total Harga"] || row["Total"]);
-        monthMap[mKey].qty += Number(row["Jumlah"] || row["Qty"]) || 0;
-      }
-    });
-    timeLabels = Object.keys(monthMap);
-    timeOmsetValues = timeLabels.map(k => monthMap[k].omset);
-    timeQtyValues = timeLabels.map(k => monthMap[k].qty);
-  }
-
-  document.getElementById("trendChartTitle").innerText = titleText;
-
-  barChartInstance = new Chart(barCanvas.getContext("2d"), {
-    type: "bar",
-    data: {
-      labels: timeLabels,
-      datasets: [{ label: "NILAI", data: timeOmsetValues, backgroundColor: "#ea580c", borderRadius: 6, barPercentage: 0.45 }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: function(context) {
-              const idx = context.dataIndex;
-              return [` OMSET: ${formatRupiah(context.raw)}`, ` QTY: ${timeQtyValues[idx] || 0}`];
+            if (itemNama && expenseMap[itemNama]) {
+              expenseMap[itemNama].qty += qty;
+              expenseMap[itemNama].biaya += subtotal;
+            } else if (itemNama && subtotal > 0) {
+              expenseMap[itemNama] = {
+                nama: itemNama,
+                qty: qty,
+                biaya: subtotal
+              };
             }
           }
+        });
+      }
+
+      const names = [];
+      const costValues = [];
+      const qtyValues = [];
+
+      Object.values(expenseMap).forEach(item => {
+        totalExpense += item.biaya;
+        names.push(item.nama);
+        costValues.push(item.biaya);
+        qtyValues.push(item.qty);
+
+        if (item.biaya > topCost && item.biaya > 0) {
+          topCost = item.biaya;
+          topExpenseItem = `${item.nama} (${formatRupiah(item.biaya)})`;
         }
-      },
-      scales: { x: { grid: { display: false } }, y: { beginAtZero: true, display: false } }
-    }
-  });
+      });
 
-  const trNama = document.getElementById("trNamaBarang");
-  const trNilai = document.getElementById("trNilaiBarang");
-  const trQty = document.getElementById("trQtyBarang");
+      const totalCostEl = document.getElementById("expenseTotalCost");
+      if (totalCostEl) totalCostEl.innerText = formatRupiah(totalExpense);
 
-  trNama.innerHTML = `<td class="p-2 text-left font-extrabold text-slate-600 bg-slate-100 dark:bg-slate-800 w-32">PERIODE / MENU</td>`;
-  trNilai.innerHTML = `<td class="p-2 text-left font-extrabold text-brand-600 bg-slate-50 dark:bg-slate-800/80 w-32">NILAI</td>`;
-  trQty.innerHTML = `<td class="p-2 text-left font-extrabold text-blue-600 dark:text-blue-400 bg-blue-100/50 dark:bg-blue-900/40 w-32">QTY</td>`;
+      const totalItemsEl = document.getElementById("expenseTotalItems");
+      if (totalItemsEl) totalItemsEl.innerText = `${Object.keys(expenseMap).length} Jenis`;
 
-  timeLabels.forEach((lbl, idx) => {
-    trNama.innerHTML += `<td class="p-2 font-bold uppercase text-slate-700 dark:text-slate-200 border-l border-slate-200 dark:border-slate-700">${escapeHtml(lbl)}</td>`;
-    trNilai.innerHTML += `<td class="p-2 font-bold text-brand-600 border-l border-slate-200 dark:border-slate-700">${formatRupiah(timeOmsetValues[idx])}</td>`;
-    trQty.innerHTML += `<td class="p-2 font-black text-blue-600 dark:text-blue-400 border-l border-slate-200 dark:border-slate-700">${timeQtyValues[idx] || 0}</td>`;
-  });
+      const topItemEl = document.getElementById("expenseTopItem");
+      if (topItemEl) topItemEl.innerText = topExpenseItem;
 
-  const products = Object.keys(productSummary);
-  const sortedProducts = products.slice().sort((a, b) => (productSummary[b].qty || 0) - (productSummary[a].qty || 0));
-  const topOmsetValues = sortedProducts.map(p => productSummary[p].omset);
+      const expCanvas = document.getElementById("expenseBarChart");
+      if (!expCanvas) return;
 
-  topSalesChartInstance = new Chart(topSalesCanvas.getContext("2d"), {
-    type: "bar",
-    data: {
-      labels: sortedProducts,
-      datasets: [{ label: "NILAI", data: topOmsetValues, backgroundColor: "#10b981", borderRadius: 6, barPercentage: 0.45 }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: function(context) {
-              const prodName = context.label;
-              const qty = productSummary[prodName] ? productSummary[prodName].qty : 0;
-              return [` NILAI: ${formatRupiah(context.raw)}`, ` QTY: ${qty}`];
+      if (expenseChartInstance) expenseChartInstance.destroy();
+
+      expenseChartInstance = new Chart(expCanvas.getContext("2d"), {
+        type: "bar",
+        data: {
+          labels: names,
+          datasets: [{
+            label: "BIAYA",
+            data: costValues,
+            backgroundColor: "#ef4444",
+            borderRadius: 6,
+            barPercentage: 0.45
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  const itemIndex = context.dataIndex;
+                  return [
+                    ` BIAYA: ${formatRupiah(context.raw)}`,
+                    ` QTY: ${qtyValues[itemIndex]}`
+                  ];
+                }
+              }
             }
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { display: false } },
+            y: { beginAtZero: true, display: false }
           }
         }
-      },
-      scales: { x: { grid: { display: false } }, y: { beginAtZero: true, display: false } }
+      });
+
+      const trNama = document.getElementById("expTrNamaBahan");
+      const trNilai = document.getElementById("expTrNilaiBiaya");
+      const trQty = document.getElementById("expTrQtyBahan");
+
+      if (!trNama || !trNilai || !trQty) return;
+
+      trNama.innerHTML = `<td class="p-2 text-left font-extrabold text-slate-600 bg-slate-100 dark:bg-slate-800 w-32">NAMA BAHAN BAKU</td>`;
+      trNilai.innerHTML = `<td class="p-2 text-left font-extrabold text-red-600 bg-slate-50 dark:bg-slate-800/80 w-32">BIAYA</td>`;
+      trQty.innerHTML = `<td class="p-2 text-left font-extrabold text-amber-600 dark:text-amber-400 bg-amber-100/50 dark:bg-amber-900/40 w-32">QTY</td>`;
+
+      names.forEach((p, idx) => {
+        trNama.innerHTML += `<td class="p-2 font-bold uppercase text-slate-700 dark:text-slate-200 border-l border-slate-200 dark:border-slate-700">${escapeHtml(p)}</td>`;
+        trNilai.innerHTML += `<td class="p-2 font-bold text-red-600 border-l border-slate-200 dark:border-slate-700">${formatRupiah(costValues[idx])}</td>`;
+        trQty.innerHTML += `<td class="p-2 font-black text-amber-600 dark:text-amber-400 border-l border-slate-200 dark:border-slate-700">${qtyValues[idx]}</td>`;
+      });
     }
-  });
 
-  const trNamaTop = document.getElementById("trNamaTop");
-  const trNilaiTop = document.getElementById("trNilaiTop");
-  const trQtyTop = document.getElementById("trQtyTop");
-
-  trNamaTop.innerHTML = `<td class="p-2 text-left font-extrabold text-slate-600 bg-slate-100 dark:bg-slate-800 w-32">NAMA BARANG</td>`;
-  trNilaiTop.innerHTML = `<td class="p-2 text-left font-extrabold text-emerald-600 bg-slate-50 dark:bg-slate-800/80 w-32">NILAI</td>`;
-  trQtyTop.innerHTML = `<td class="p-2 text-left font-extrabold text-emerald-600 dark:text-emerald-400 bg-emerald-100/50 dark:bg-emerald-900/40 w-32">QTY</td>`;
-
-  sortedProducts.forEach(p => {
-    const data = productSummary[p] || { omset: 0, qty: 0 };
-    trNamaTop.innerHTML += `<td class="p-2 font-bold uppercase text-slate-700 dark:text-slate-200 border-l border-slate-200 dark:border-slate-700">${escapeHtml(p)}</td>`;
-    trNilaiTop.innerHTML += `<td class="p-2 font-bold text-emerald-600 border-l border-slate-200 dark:border-slate-700">${formatRupiah(data.omset)}</td>`;
-    trQtyTop.innerHTML += `<td class="p-2 font-black text-emerald-600 dark:text-emerald-400 border-l border-slate-200 dark:border-slate-700">${data.qty}</td>`;
-  });
-}
-
-function renderTable(data) {
-  const tbody = document.getElementById("salesTableBody");
-  const kasirTbody = document.getElementById("kasirRecentTable");
-  tbody.innerHTML = "";
-  kasirTbody.innerHTML = "";
-
-  const reversed = data.slice().reverse();
-  reversed.forEach((row, index) => {
-    const dateStr = getRowDateString(row);
-    const date = parseTransactionDate(dateStr);
-    const timeStr = date ? date.toLocaleString("id-ID") : (dateStr || "-");
-    const harga = getNumericValue(row["Harga Satuan"] || row["Harga"]);
-    const total = getNumericValue(row["Total Harga"] || row["Total"]);
-    const method = row["Metode Pembayaran"] || row["Metode"] || "Tunai";
-
-    const methodBadge = method.toLowerCase().includes("non")
-      ? `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">Non-Tunai</span>`
-      : `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">Tunai</span>`;
-
-    tbody.innerHTML += `
-      <tr class="border-b border-slate-100 dark:border-slate-800">
-        <td class="py-2.5 px-3 font-mono text-[11px]">${escapeHtml(row["ID Transaksi"] || row["ID"] || "-")}</td>
-        <td class="py-2.5 px-3 text-slate-500">${escapeHtml(timeStr)}</td>
-        <td class="py-2.5 px-3 font-semibold">${escapeHtml(row["Nama Produk"] || row["Produk"] || "-")}</td>
-        <td class="py-2.5 px-3 text-center">${Number(row["Jumlah"] || row["Qty"]) || 0}</td>
-        <td class="py-2.5 px-3 text-center">${methodBadge}</td>
-        <td class="py-2.5 px-3 text-right">${formatRupiah(harga)}</td>
-        <td class="py-2.5 px-3 text-right font-bold text-brand-600">${formatRupiah(total)}</td>
-      </tr>`;
-
-    if (index < 5) {
-      kasirTbody.innerHTML += `
-        <tr class="border-b border-slate-100 dark:border-slate-800">
-          <td class="py-2 px-3 text-slate-400">${escapeHtml(timeStr)}</td>
-          <td class="py-2 px-3 font-medium">${escapeHtml(row["Nama Produk"] || row["Produk"] || "-")}</td>
-          <td class="py-2 px-3 text-center">${Number(row["Jumlah"] || row["Qty"]) || 0}</td>
-          <td class="py-2 px-3 text-center">${methodBadge}</td>
-          <td class="py-2 px-3 text-right font-bold text-brand-600">${formatRupiah(total)}</td>
-        </tr>`;
+    function getRowDateString(row) {
+      if (!row) return "";
+      return row["Tanggal & Waktu"] || row["Waktu"] || row["Tanggal"] || row["Date"] || row["Timestamp"] || Object.values(row)[1] || "";
     }
-  });
-}
 
-function exportToCSV() {
-  if (!salesData.length) { alert("Belum ada data transaksi."); return; }
-  let csv = "ID Transaksi,Tanggal & Waktu,Nama Produk,Jumlah,Metode Pembayaran,Harga Satuan,Total Harga\n";
-  salesData.forEach(row => {
-    const dateStr = getRowDateString(row);
-    const date = parseTransactionDate(dateStr);
-    const time = date ? date.toLocaleString("id-ID") : (dateStr || "");
-    csv += [
-      row["ID Transaksi"] || row["ID"] || "",
-      time,
-      row["Nama Produk"] || row["Produk"] || "",
-      row["Jumlah"] || row["Qty"] || 0,
-      row["Metode Pembayaran"] || row["Metode"] || "Tunai",
-      row["Harga Satuan"] || row["Harga"] || 0,
-      row["Total Harga"] || row["Total"] || 0
-    ].map(value => `"${String(value).replace(/"/g, '""')}"`).join(",") + "\n";
-  });
+    function parseTransactionDate(value) {
+      if (!value) return null;
+      if (value instanceof Date) return value;
 
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const link = document.createElement("a");
-  const url = URL.createObjectURL(blob);
-  link.href = url;
-  link.download = `Penjualan_InuChicken_${formatDateInput(new Date())}.csv`;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-}
+      const str = String(value).trim();
+      
+      if (str.includes("/") || str.includes("-")) {
+        const spaceParts = str.split(" ");
+        const delimiter = str.includes("/") ? "/" : "-";
+        const dParts = spaceParts[0].split(delimiter);
 
-async function triggerYearlyArchive() {
-  const confirmFirst = confirm("PERINGATAN!\n\nProses ini akan mengarsipkan seluruh data Penjualan & HPP tahun ini ke tab baru di Google Sheets, lalu mengosongkan sheet utama untuk tahun baru.\n\nApakah Anda yakin ingin melanjutkan?");
-  if (!confirmFirst) return;
+        if (dParts.length === 3) {
+          let p1 = parseInt(dParts[0], 10);
+          let p2 = parseInt(dParts[1], 10);
+          let p3 = parseInt(dParts[2], 10);
 
-  const doubleCheck = prompt("Ketik 'ARSIP' (huruf besar) untuk mengonfirmasi proses reset:");
-  if (doubleCheck !== "ARSIP") {
-    alert("Konfirmasi tidak sesuai. Proses dibatalkan.");
-    return;
-  }
-
-  const btn = document.getElementById("btnArchiveData");
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Mengarsipkan...';
-  }
-
-  try {
-    const payload = { action: "archiveYearlyData" };
-    const response = await fetch(APPS_SCRIPT_URL, {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
-    const data = await response.json();
-
-    if (data.status === "success") {
-      alert(data.message);
-      await fetchSalesData();
-    } else {
-      alert("Gagal melakukan arsip:\n" + data.message);
-    }
-  } catch (error) {
-    console.error(error);
-    alert("Terjadi kesalahan jaringan saat melakukan arsip.");
-    reportErrorToBackend("triggerYearlyArchive error", error);
-  } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.innerHTML = '<i class="fa-solid fa-box-archive"></i> Arsip & Reset Tahun Baru';
-    }
-  }
-}
-
-// DROPDOWN MURNI NAMA KASIR DARI SHEET ABSENSI
-function populateEmployeeOptions() {
-  const datalist = document.getElementById("employeeListOptions");
-  if (!datalist) return;
-
-  datalist.innerHTML = "";
-  const uniqueKasirNames = new Set();
-
-  if (attendanceData && attendanceData.length > 0) {
-    attendanceData.forEach(row => {
-      const role = String(row["Role"] || row["Akses"] || Object.values(row)[3] || "").toLowerCase().trim();
-      const name = String(row["Nama Karyawan"] || row["Nama"] || Object.values(row)[2] || "").trim();
-
-      if (!role.includes("admin") && !role.includes("owner") && !name.toLowerCase().includes("owner") && !name.toLowerCase().includes("admin") && name !== "") {
-        uniqueKasirNames.add(name);
-      }
-    });
-  }
-
-  uniqueKasirNames.forEach(name => {
-    datalist.innerHTML += `<option value="${escapeHtml(name)}">`;
-  });
-
-  const nameInput = document.getElementById("salEmployeeName");
-  if (nameInput) {
-    const currentVal = nameInput.value.trim().toLowerCase();
-    if (!currentVal || currentVal === "kasir shift" || currentVal === "owner / admin" || currentVal.includes("owner") || currentVal.includes("admin")) {
-      const firstKasir = Array.from(uniqueKasirNames)[0] || "Kasir Shift";
-      nameInput.value = firstKasir;
-      if (firstKasir !== "Kasir Shift") onEmployeeNameChange();
-    }
-  }
-}
-
-// OTOMATIS TANGGAL DARI DATA ABSENSI KASIR YANG DIPILIH
-function onEmployeeNameChange() {
-  const nameInput = document.getElementById("salEmployeeName");
-  if (!nameInput) return;
-
-  const empName = nameInput.value.trim().toLowerCase();
-  let minDate = null;
-  let maxDate = null;
-
-  if (attendanceData && attendanceData.length > 0) {
-    attendanceData.forEach(row => {
-      const rowRole = String(row["Role"] || row["Akses"] || Object.values(row)[3] || "").toLowerCase().trim();
-      const rowName = String(row["Nama Karyawan"] || row["Nama"] || Object.values(row)[2] || "").trim().toLowerCase();
-
-      if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) return;
-
-      const isMatch = (empName !== "" && (rowName === empName || rowName.includes(empName) || empName.includes(rowName)));
-
-      if (isMatch) {
-        const rawDate = row["Tanggal"] || row["Waktu"] || Object.values(row)[1] || "";
-        const dateObj = parseTransactionDate(rawDate);
-
-        if (dateObj && !isNaN(dateObj.getTime())) {
-          if (!minDate || dateObj < minDate) minDate = dateObj;
-          if (!maxDate || dateObj > maxDate) maxDate = dateObj;
+          if (p1 > 1000) {
+            return new Date(p1, p2 - 1, p3);
+          }
+          if (p3 > 1000) {
+            return new Date(p3, p2 - 1, p1);
+          }
         }
       }
-    });
-  }
 
-  if (minDate && maxDate) {
-    document.getElementById("salStartDate").value = formatDateInput(minDate);
-    document.getElementById("salEndDate").value = formatDateInput(maxDate);
-  } else {
-    setDefaultDates();
-  }
+      const parsedDirect = new Date(value);
+      return isNaN(parsedDirect.getTime()) ? null : parsedDirect;
+    }
 
-  calculateSalaryFromDates();
-}
+    function setDashboardFilter(filter) {
+      activeFilter = filter;
+      const buttons = { today: "filterToday", "7days": "filter7Days", month: "filterMonth", all: "filterAll" };
+      Object.values(buttons).forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.className = "px-3 py-1.5 rounded-lg text-xs font-bold text-slate-500";
+      });
+      const activeBtn = document.getElementById(buttons[filter]);
+      if (activeBtn) activeBtn.className = "px-3 py-1.5 rounded-lg text-xs font-bold bg-white dark:bg-slate-700 text-brand-600 shadow-sm";
 
-// HITUNG GAJI KASIR AKURAT PRESISI
-function calculateSalaryFromDates() {
-  const nameInput = document.getElementById("salEmployeeName");
-  const empName = nameInput ? nameInput.value.trim().toLowerCase() : "";
-  const start = document.getElementById("salStartDate").value;
-  const end = document.getElementById("salEndDate").value;
-  const dailyRate = Number(document.getElementById("salDailyRate").value) || 0;
-  const sickDays = Math.max(0, Number(document.getElementById("salSickDays").value) || 0);
-  const deduction = Math.max(0, Number(document.getElementById("salDeduction").value) || 0);
+      const labels = {
+        today: "Menampilkan data hari ini",
+        "7days": "Menampilkan data 7 hari terakhir (Per Hari)",
+        month: "Menampilkan data bulan ini (Per Minggu)",
+        all: "Menampilkan seluruh data (Per Bulan)"
+      };
+      const labelEl = document.getElementById("dashboardFilterLabel");
+      if (labelEl) labelEl.innerText = labels[filter];
+      renderDashboard();
+    }
 
-  let actualWorkDays = 0;
-  const uniqueDates = new Set();
+    function filterDataByPeriod(data, filter) {
+      if (filter === "all") return data;
+      const now = new Date();
+      const targetYear = now.getFullYear();
+      const targetMonth = now.getMonth();
 
-  if (empName.includes("owner") || empName.includes("admin")) {
-    document.getElementById("salWorkDaysDisplay").innerText = `0 Hari (Admin/Owner)`;
-    document.getElementById("salTotalDisplay").innerText = formatRupiah(0);
-    document.getElementById("salDetailFormula").innerText = "Akses Admin/Owner tidak dihitung gaji.";
-    return;
-  }
+      return data.filter(item => {
+        const dateStr = getRowDateString(item);
+        const date = parseTransactionDate(dateStr);
 
-  if (start && end && attendanceData && attendanceData.length > 0) {
-    const startDate = new Date(start + "T00:00:00");
-    const endDate = new Date(end + "T23:59:59");
+        if (date && !isNaN(date.getTime())) {
+          if (filter === "today") return (date.getDate() === now.getDate() && date.getMonth() === targetMonth && date.getFullYear() === targetYear);
+          if (filter === "7days") {
+            const diffDays = (now.getTime() - date.getTime()) / (1000 * 3600 * 24);
+            return diffDays >= 0 && diffDays <= 7;
+          }
+          if (filter === "month") return (date.getMonth() === targetMonth && date.getFullYear() === targetYear);
+        }
 
-    attendanceData.forEach(row => {
-      const rowRole = String(row["Role"] || row["Akses"] || Object.values(row)[3] || "").trim().toLowerCase();
-      const rowName = String(row["Nama Karyawan"] || row["Nama"] || Object.values(row)[2] || "").trim().toLowerCase();
+        const rawUpper = String(dateStr).toUpperCase().trim();
+        const mPad = String(targetMonth + 1).padStart(2, '0');
+        const mNoPad = String(targetMonth + 1);
 
-      // 1. FILTER MUTLAK: Abaikan log milik Admin / Owner
-      if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) {
-        return; 
+        if (filter === "month") {
+          const monthNames = ["JAN", "FEB", "MAR", "APR", "MEI", "JUN", "JUL", "AGU", "SEP", "OKT", "NOV", "DES"];
+          const fullMonthNames = ["JANUARI", "FEBRUARI", "MARET", "APRIL", "MEI", "JUNI", "JULI", "AGUSTUS", "SEPTEMBER", "OKTOBER", "NOVEMBER", "DESEMBER"];
+          const isNumMatch = (rawUpper.includes(`/${mPad}/${targetYear}`) || rawUpper.includes(`/${mNoPad}/${targetYear}`) || rawUpper.includes(`-${mPad}-${targetYear}`) || rawUpper.includes(`${targetYear}-${mPad}`));
+          const isTextMatch = ((rawUpper.includes(monthNames[targetMonth]) || rawUpper.includes(fullMonthNames[targetMonth])) && rawUpper.includes(String(targetYear)));
+          return isNumMatch || isTextMatch;
+        }
+        if (filter === "today") {
+          const dPad = String(now.getDate()).padStart(2, '0');
+          return rawUpper.includes(`${dPad}/${mPad}/${targetYear}`) || rawUpper.includes(`${now.getDate()}/${mNoPad}/${targetYear}`);
+        }
+        return false;
+      });
+    }
+
+    function renderDashboard() {
+      const filtered = filterDataByPeriod(salesData, activeFilter);
+      let totalOmset = 0, omsetTunai = 0, omsetNonTunai = 0, totalAyamNasiQty = 0;
+
+      const productSummary = {
+        "Nasi + Ayam": { omset: 0, qty: 0 },
+        "Ayam": { omset: 0, qty: 0 },
+        "Nasi": { omset: 0, qty: 0 },
+        "Saus / Sambal": { omset: 0, qty: 0 }
+      };
+
+      filtered.forEach(row => {
+        const total = getNumericValue(row["Total Harga"] || row["Total"]);
+        const qty = Number(row["Jumlah"] || row["Qty"]) || 0;
+        const product = row["Nama Produk"] || row["Produk"] || "Lainnya";
+        const method = row["Metode Pembayaran"] || row["Metode"] || "Tunai";
+
+        totalOmset += total;
+        if (method.toLowerCase().includes("non")) omsetNonTunai += total;
+        else omsetTunai += total;
+
+        const lowerProd = product.toLowerCase();
+        if (lowerProd === "nasi + ayam" || lowerProd === "ayam" || lowerProd.includes("ayam")) {
+          totalAyamNasiQty += qty;
+        }
+
+        if (!productSummary[product]) productSummary[product] = { omset: 0, qty: 0 };
+        productSummary[product].omset += total;
+        productSummary[product].qty += qty;
+      });
+
+      const omsetEl = document.getElementById("dashTotalOmset");
+      const tunaiEl = document.getElementById("dashOmsetTunai");
+      const nonTunaiEl = document.getElementById("dashOmsetNonTunai");
+      const qtyEl = document.getElementById("dashTotalAyamNasiQty");
+
+      if (omsetEl) omsetEl.innerText = formatRupiah(totalOmset);
+      if (tunaiEl) tunaiEl.innerText = formatRupiah(omsetTunai);
+      if (nonTunaiEl) nonTunaiEl.innerText = formatRupiah(omsetNonTunai);
+      if (qtyEl) qtyEl.innerText = `${totalAyamNasiQty} pcs`;
+
+      renderCharts(productSummary, filtered);
+      renderTable(salesData);
+    }
+
+    function renderCharts(productSummary, filteredData) {
+      const barCanvas = document.getElementById("productBarChart");
+      const topSalesCanvas = document.getElementById("topSalesBarChart");
+
+      if (!barCanvas || !topSalesCanvas) return;
+      if (barChartInstance) barChartInstance.destroy();
+      if (topSalesChartInstance) topSalesChartInstance.destroy();
+
+      let timeLabels = [];
+      let timeOmsetValues = [];
+      let timeQtyValues = [];
+      let titleText = "INFORMASI PENJUALAN INU CHICKEN";
+
+      if (activeFilter === "today") {
+        titleText = "PENJUALAN PER MENU (HARI INI)";
+        timeLabels = Object.keys(productSummary);
+        timeOmsetValues = timeLabels.map(p => productSummary[p].omset);
+        timeQtyValues = timeLabels.map(p => productSummary[p].qty);
+      } else if (activeFilter === "7days") {
+        titleText = "TREN PENJUALAN 7 HARI TERAKHIR (PER HARI)";
+        const dayMap = {};
+        for (let i = 6; i >= 0; i--) {
+          const d = new Date();
+          d.setDate(d.getDate() - i);
+          const dayLabel = d.toLocaleDateString("id-ID", { weekday: "short", day: "numeric" });
+          dayMap[dayLabel] = { omset: 0, qty: 0 };
+        }
+        filteredData.forEach(row => {
+          const d = parseTransactionDate(getRowDateString(row));
+          if (d) {
+            const dayLabel = d.toLocaleDateString("id-ID", { weekday: "short", day: "numeric" });
+            if (dayMap[dayLabel]) {
+              dayMap[dayLabel].omset += getNumericValue(row["Total Harga"] || row["Total"]);
+              dayMap[dayLabel].qty += Number(row["Jumlah"] || row["Qty"]) || 0;
+            }
+          }
+        });
+        timeLabels = Object.keys(dayMap);
+        timeOmsetValues = timeLabels.map(k => dayMap[k].omset);
+        timeQtyValues = timeLabels.map(k => dayMap[k].qty);
+      } else if (activeFilter === "month") {
+        titleText = "TREN PENJUALAN BULAN INI (PER MINGGU)";
+        const weekMap = { "Minggu 1": { omset: 0, qty: 0 }, "Minggu 2": { omset: 0, qty: 0 }, "Minggu 3": { omset: 0, qty: 0 }, "Minggu 4+": { omset: 0, qty: 0 } };
+        filteredData.forEach(row => {
+          const d = parseTransactionDate(getRowDateString(row));
+          if (d) {
+            const dateNum = d.getDate();
+            let wKey = "Minggu 1";
+            if (dateNum > 21) wKey = "Minggu 4+";
+            else if (dateNum > 14) wKey = "Minggu 3";
+            else if (dateNum > 7) wKey = "Minggu 2";
+
+            weekMap[wKey].omset += getNumericValue(row["Total Harga"] || row["Total"]);
+            weekMap[wKey].qty += Number(row["Jumlah"] || row["Qty"]) || 0;
+          }
+        });
+        timeLabels = Object.keys(weekMap);
+        timeOmsetValues = timeLabels.map(k => weekMap[k].omset);
+        timeQtyValues = timeLabels.map(k => weekMap[k].qty);
+      } else if (activeFilter === "all") {
+        titleText = "TREN PENJUALAN KESELURUHAN (PER BULAN)";
+        const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+        const monthMap = {};
+        filteredData.forEach(row => {
+          const d = parseTransactionDate(getRowDateString(row));
+          if (d) {
+            const mKey = `${monthNames[d.getMonth()]} ${d.getFullYear()}`;
+            if (!monthMap[mKey]) monthMap[mKey] = { omset: 0, qty: 0 };
+            monthMap[mKey].omset += getNumericValue(row["Total Harga"] || row["Total"]);
+            monthMap[mKey].qty += Number(row["Jumlah"] || row["Qty"]) || 0;
+          }
+        });
+        timeLabels = Object.keys(monthMap);
+        timeOmsetValues = timeLabels.map(k => monthMap[k].omset);
+        timeQtyValues = timeLabels.map(k => monthMap[k].qty);
       }
 
-      // 2. FILTER NAMA: Wajib cocok dengan nama Kasir
-      const isNameMatch = empName !== "" && (rowName === empName || rowName.includes(empName) || empName.includes(rowName));
+      const trendTitleEl = document.getElementById("trendChartTitle");
+      if (trendTitleEl) trendTitleEl.innerText = titleText;
 
-      if (isNameMatch) {
-        const rawDate = row["Tanggal"] || row["Waktu"] || Object.values(row)[1] || "";
-        const dateObj = parseTransactionDate(rawDate);
+      barChartInstance = new Chart(barCanvas.getContext("2d"), {
+        type: "bar",
+        data: {
+          labels: timeLabels,
+          datasets: [{ label: "NILAI", data: timeOmsetValues, backgroundColor: "#ea580c", borderRadius: 6, barPercentage: 0.45 }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  const idx = context.dataIndex;
+                  return [` OMSET: ${formatRupiah(context.raw)}`, ` QTY: ${timeQtyValues[idx] || 0}`];
+                }
+              }
+            }
+          },
+          scales: { x: { grid: { display: false } }, y: { beginAtZero: true, display: false } }
+        }
+      });
 
-        // 3. FILTER TANGGAL
-        if (dateObj && dateObj >= startDate && dateObj <= endDate) {
-          const dateKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
-          uniqueDates.add(dateKey);
+      const trNama = document.getElementById("trNamaBarang");
+      const trNilai = document.getElementById("trNilaiBarang");
+      const trQty = document.getElementById("trQtyBarang");
+
+      if (trNama && trNilai && trQty) {
+        trNama.innerHTML = `<td class="p-2 text-left font-extrabold text-slate-600 bg-slate-100 dark:bg-slate-800 w-32">PERIODE / MENU</td>`;
+        trNilai.innerHTML = `<td class="p-2 text-left font-extrabold text-brand-600 bg-slate-50 dark:bg-slate-800/80 w-32">NILAI</td>`;
+        trQty.innerHTML = `<td class="p-2 text-left font-extrabold text-blue-600 dark:text-blue-400 bg-blue-100/50 dark:bg-blue-900/40 w-32">QTY</td>`;
+
+        timeLabels.forEach((lbl, idx) => {
+          trNama.innerHTML += `<td class="p-2 font-bold uppercase text-slate-700 dark:text-slate-200 border-l border-slate-200 dark:border-slate-700">${escapeHtml(lbl)}</td>`;
+          trNilai.innerHTML += `<td class="p-2 font-bold text-brand-600 border-l border-slate-200 dark:border-slate-700">${formatRupiah(timeOmsetValues[idx])}</td>`;
+          trQty.innerHTML += `<td class="p-2 font-black text-blue-600 dark:text-blue-400 border-l border-slate-200 dark:border-slate-700">${timeQtyValues[idx] || 0}</td>`;
+        });
+      }
+
+      const products = Object.keys(productSummary);
+      const sortedProducts = products.slice().sort((a, b) => (productSummary[b].qty || 0) - (productSummary[a].qty || 0));
+      const topOmsetValues = sortedProducts.map(p => productSummary[p].omset);
+
+      topSalesChartInstance = new Chart(topSalesCanvas.getContext("2d"), {
+        type: "bar",
+        data: {
+          labels: sortedProducts,
+          datasets: [{ label: "NILAI", data: topOmsetValues, backgroundColor: "#10b981", borderRadius: 6, barPercentage: 0.45 }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  const prodName = context.label;
+                  const qty = productSummary[prodName] ? productSummary[prodName].qty : 0;
+                  return [` NILAI: ${formatRupiah(context.raw)}`, ` QTY: ${qty}`];
+                }
+              }
+            }
+          },
+          scales: { x: { grid: { display: false } }, y: { beginAtZero: true, display: false } }
+        }
+      });
+
+      const trNamaTop = document.getElementById("trNamaTop");
+      const trNilaiTop = document.getElementById("trNilaiTop");
+      const trQtyTop = document.getElementById("trQtyTop");
+
+      if (trNamaTop && trNilaiTop && trQtyTop) {
+        trNamaTop.innerHTML = `<td class="p-2 text-left font-extrabold text-slate-600 bg-slate-100 dark:bg-slate-800 w-32">NAMA BARANG</td>`;
+        trNilaiTop.innerHTML = `<td class="p-2 text-left font-extrabold text-emerald-600 bg-slate-50 dark:bg-slate-800/80 w-32">NILAI</td>`;
+        trQtyTop.innerHTML = `<td class="p-2 text-left font-extrabold text-emerald-600 dark:text-emerald-400 bg-emerald-100/50 dark:bg-emerald-900/40 w-32">QTY</td>`;
+
+        sortedProducts.forEach(p => {
+          const data = productSummary[p] || { omset: 0, qty: 0 };
+          trNamaTop.innerHTML += `<td class="p-2 font-bold uppercase text-slate-700 dark:text-slate-200 border-l border-slate-200 dark:border-slate-700">${escapeHtml(p)}</td>`;
+          trNilaiTop.innerHTML += `<td class="p-2 font-bold text-emerald-600 border-l border-slate-200 dark:border-slate-700">${formatRupiah(data.omset)}</td>`;
+          trQtyTop.innerHTML += `<td class="p-2 font-black text-emerald-600 dark:text-emerald-400 border-l border-slate-200 dark:border-slate-700">${data.qty}</td>`;
+        });
+      }
+    }
+
+    function renderTable(data) {
+      const tbody = document.getElementById("salesTableBody");
+      const kasirTbody = document.getElementById("kasirRecentTable");
+      if (tbody) tbody.innerHTML = "";
+      if (kasirTbody) kasirTbody.innerHTML = "";
+
+      const reversed = data.slice().reverse();
+      reversed.forEach((row, index) => {
+        const dateStr = getRowDateString(row);
+        const date = parseTransactionDate(dateStr);
+        const timeStr = date ? date.toLocaleString("id-ID") : (dateStr || "-");
+        const harga = getNumericValue(row["Harga Satuan"] || row["Harga"]);
+        const total = getNumericValue(row["Total Harga"] || row["Total"]);
+        const method = row["Metode Pembayaran"] || row["Metode"] || "Tunai";
+
+        const methodBadge = method.toLowerCase().includes("non")
+          ? `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">Non-Tunai</span>`
+          : `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">Tunai</span>`;
+
+        if (tbody) {
+          tbody.innerHTML += `
+            <tr class="border-b border-slate-100 dark:border-slate-800">
+              <td class="py-2.5 px-3 font-mono text-[11px]">${escapeHtml(row["ID Transaksi"] || row["ID"] || "-")}</td>
+              <td class="py-2.5 px-3 text-slate-500">${escapeHtml(timeStr)}</td>
+              <td class="py-2.5 px-3 font-semibold">${escapeHtml(row["Nama Produk"] || row["Produk"] || "-")}</td>
+              <td class="py-2.5 px-3 text-center">${Number(row["Jumlah"] || row["Qty"]) || 0}</td>
+              <td class="py-2.5 px-3 text-center">${methodBadge}</td>
+              <td class="py-2.5 px-3 text-right">${formatRupiah(harga)}</td>
+              <td class="py-2.5 px-3 text-right font-bold text-brand-600">${formatRupiah(total)}</td>
+            </tr>`;
+        }
+
+        if (kasirTbody && index < 5) {
+          kasirTbody.innerHTML += `
+            <tr class="border-b border-slate-100 dark:border-slate-800">
+              <td class="py-2 px-3 text-slate-400">${escapeHtml(timeStr)}</td>
+              <td class="py-2 px-3 font-medium">${escapeHtml(row["Nama Produk"] || row["Produk"] || "-")}</td>
+              <td class="py-2 px-3 text-center">${Number(row["Jumlah"] || row["Qty"]) || 0}</td>
+              <td class="py-2 px-3 text-center">${methodBadge}</td>
+              <td class="py-2 px-3 text-right font-bold text-brand-600">${formatRupiah(total)}</td>
+            </tr>`;
+        }
+      });
+    }
+
+    function exportToCSV() {
+      if (!salesData.length) { alert("Belum ada data transaksi."); return; }
+      let csv = "ID Transaksi,Tanggal & Waktu,Nama Produk,Jumlah,Metode Pembayaran,Harga Satuan,Total Harga\n";
+      salesData.forEach(row => {
+        const dateStr = getRowDateString(row);
+        const date = parseTransactionDate(dateStr);
+        const time = date ? date.toLocaleString("id-ID") : (dateStr || "");
+        csv += [
+          row["ID Transaksi"] || row["ID"] || "",
+          time,
+          row["Nama Produk"] || row["Produk"] || "",
+          row["Jumlah"] || row["Qty"] || 0,
+          row["Metode Pembayaran"] || row["Metode"] || "Tunai",
+          row["Harga Satuan"] || row["Harga"] || 0,
+          row["Total Harga"] || row["Total"] || 0
+        ].map(value => `"${String(value).replace(/"/g, '""')}"`).join(",") + "\n";
+      });
+
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const link = document.createElement("a");
+      const url = URL.createObjectURL(blob);
+      link.href = url;
+      link.download = `Penjualan_InuChicken_${formatDateInput(new Date())}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+
+    async function triggerYearlyArchive() {
+      const confirmFirst = confirm("PERINGATAN!\n\nProses ini akan mengarsipkan seluruh data Penjualan & HPP tahun ini ke tab baru di Google Sheets, lalu mengosongkan sheet utama untuk tahun baru.\n\nApakah Anda yakin ingin melanjutkan?");
+      if (!confirmFirst) return;
+
+      const doubleCheck = prompt("Ketik 'ARSIP' (huruf besar) untuk mengonfirmasi proses reset:");
+      if (doubleCheck !== "ARSIP") {
+        alert("Konfirmasi tidak sesuai. Proses dibatalkan.");
+        return;
+      }
+
+      const btn = document.getElementById("btnArchiveData");
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Mengarsipkan...';
+      }
+
+      try {
+        const payload = { action: "archiveYearlyData" };
+        const response = await fetch(APPS_SCRIPT_URL, {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+
+        if (data.status === "success") {
+          alert(data.message);
+          await fetchSalesData();
+        } else {
+          alert("Gagal melakukan arsip:\n" + data.message);
+        }
+      } catch (error) {
+        console.error(error);
+        alert("Terjadi kesalahan jaringan saat melakukan arsip.");
+        reportErrorToBackend("triggerYearlyArchive error", error);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<i class="fa-solid fa-box-archive"></i> Arsip & Reset Tahun Baru';
         }
       }
-    });
+    }
 
-    actualWorkDays = uniqueDates.size;
-  }
+    function populateEmployeeOptions() {
+      const datalist = document.getElementById("employeeListOptions");
+      if (!datalist) return;
 
-  const effectiveWorkDays = Math.max(0, actualWorkDays - sickDays);
-  const grossSalary = effectiveWorkDays * dailyRate;
-  const netSalary = Math.max(0, grossSalary - deduction);
+      datalist.innerHTML = "";
+      const uniqueKasirNames = new Set();
 
-  const displayWorkDaysEl = document.getElementById("salWorkDaysDisplay");
-  if (displayWorkDaysEl) displayWorkDaysEl.innerText = `${actualWorkDays} Hari Kasir Masuk`;
+      if (attendanceData && attendanceData.length > 0) {
+        attendanceData.forEach(row => {
+          const role = String(row["Role"] || row["Akses"] || Object.values(row)[3] || "").toLowerCase().trim();
+          const name = String(row["Nama Karyawan"] || row["Nama"] || Object.values(row)[2] || "").trim();
 
-  const displaySickEl = document.getElementById("salSickDaysDisplay");
-  if (displaySickEl) displaySickEl.innerText = `${sickDays} Hari Sakit/Izin`;
+          if (!role.includes("admin") && !role.includes("owner") && !name.toLowerCase().includes("owner") && !name.toLowerCase().includes("admin") && name !== "") {
+            uniqueKasirNames.add(name);
+          }
+        });
+      }
 
-  const displayTotalEl = document.getElementById("salTotalDisplay");
-  if (displayTotalEl) displayTotalEl.innerText = formatRupiah(netSalary);
+      uniqueKasirNames.forEach(name => {
+        datalist.innerHTML += `<option value="${escapeHtml(name)}">`;
+      });
 
-  const displayFormulaEl = document.getElementById("salDetailFormula");
-  if (displayFormulaEl) {
-    displayFormulaEl.innerText = `(${effectiveWorkDays} hari masuk riil × ${formatRupiah(dailyRate)}) - ${formatRupiah(deduction)}`;
-  }
-
-  window.lastSalaryDebug = {
-    empName: empName,
-    dates: Array.from(uniqueDates),
-    count: actualWorkDays
-  };
-}
-
-function showSalaryDebugModal() {
-  const debugData = window.lastSalaryDebug;
-  if (!debugData || !debugData.dates || debugData.dates.length === 0) {
-    alert("Belum ada data tanggal absensi kasir yang terdeteksi pada rentang ini.");
-    return;
-  }
-
-  alert(`DETAIL ABSENSI KASIR (${debugData.empName.toUpperCase()}):\n\nTotal Hari Masuk: ${debugData.count} Hari\n\nTanggal Kehadiran:\n- ` + debugData.dates.join("\n- "));
-}
-
-// FUNGSI MENYIMPAN REKAP GAJI KE GOOGLE SHEETS
-async function saveSalaryToSheet() {
-  const name = document.getElementById("salEmployeeName").value;
-  const start = document.getElementById("salStartDate").value;
-  const end = document.getElementById("salEndDate").value;
-  const dailyRate = Number(document.getElementById("salDailyRate").value) || 0;
-  const sickDays = Number(document.getElementById("salSickDays").value) || 0;
-  const deduction = Number(document.getElementById("salDeduction").value) || 0;
-
-  function displayDate(value) {
-    if (!value) return "-";
-    const [y,m,d] = value.split("-");
-    return `${d}/${m}/${y}`;
-  }
-
-  let actualWorkDays = 0;
-  const uniqueDates = new Set();
-  if (start && end && attendanceData.length > 0) {
-    const startDate = new Date(start + "T00:00:00");
-    const endDate = new Date(end + "T23:59:59");
-    const empName = name.trim().toLowerCase();
-
-    attendanceData.forEach(row => {
-      const rowRole = String(row["Role"] || row["Akses"] || Object.values(row)[3] || "").trim().toLowerCase();
-      const rowName = String(row["Nama Karyawan"] || row["Nama"] || Object.values(row)[2] || "").trim().toLowerCase();
-
-      if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) return;
-
-      if (rowName.includes(empName) || empName.includes(rowName) || empName === "") {
-        const rawDate = row["Tanggal"] || row["Waktu"] || Object.values(row)[1] || "";
-        const dateObj = parseTransactionDate(rawDate);
-        if (dateObj && dateObj >= startDate && dateObj <= endDate) {
-          const dateKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
-          uniqueDates.add(dateKey);
+      const nameInput = document.getElementById("salEmployeeName");
+      if (nameInput) {
+        const currentVal = nameInput.value.trim().toLowerCase();
+        if (!currentVal || currentVal === "kasir shift" || currentVal === "owner / admin" || currentVal.includes("owner") || currentVal.includes("admin")) {
+          const firstKasir = Array.from(uniqueKasirNames)[0] || "Kasir Shift";
+          nameInput.value = firstKasir;
+          if (firstKasir !== "Kasir Shift") onEmployeeNameChange();
         }
       }
-    });
+    }
 
-    actualWorkDays = uniqueDates.size;
-  }
+    function onEmployeeNameChange() {
+      const nameInput = document.getElementById("salEmployeeName");
+      if (!nameInput) return;
 
-  const effective = Math.max(0, actualWorkDays - sickDays);
-  const gross = effective * dailyRate;
-  const net = Math.max(0, gross - deduction);
-  const periodStr = `${displayDate(start)} - ${displayDate(end)}`;
+      const empName = nameInput.value.trim().toLowerCase();
+      let minDate = null;
+      let maxDate = null;
 
-  if (!confirm(`Simpan rekap gaji untuk ${name} periode ${periodStr} dengan Total Bersih ${formatRupiah(net)} ke Google Sheets?`)) return;
+      if (attendanceData && attendanceData.length > 0) {
+        attendanceData.forEach(row => {
+          const rowRole = String(row["Role"] || row["Akses"] || Object.values(row)[3] || "").toLowerCase().trim();
+          const rowName = String(row["Nama Karyawan"] || row["Nama"] || Object.values(row)[2] || "").trim().toLowerCase();
 
-  const btn = document.getElementById("btnSaveSalary");
-  btn.disabled = true;
-  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
+          if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) return;
 
-  try {
-    const payload = {
-      action: "saveSalary",
-      employeeName: name,
-      period: periodStr,
-      workDays: effective,
-      deduction: deduction,
-      netSalary: net,
-      notes: `Gaji Pokok: ${formatRupiah(gross)} (${effective} Hari)`
-    };
+          const isMatch = (empName !== "" && (rowName === empName || rowName.includes(empName) || empName.includes(rowName)));
 
-    const response = await fetch(APPS_SCRIPT_URL, { method: "POST", body: JSON.stringify(payload) });
-    const res = await response.json();
+          if (isMatch) {
+            const rawDate = row["Tanggal"] || row["Waktu"] || Object.values(row)[1] || "";
+            const dateObj = parseTransactionDate(rawDate);
 
-    if (res.status === "success") {
-      alert("Rekap gaji berhasil disimpan!");
-      await fetchSalesData();
-    } else { alert("Gagal menyimpan rekap gaji: " + (res.message || "Error server")); }
-  } catch (error) {
-    console.error(error);
-    alert("Terjadi kesalahan jaringan.");
-    reportErrorToBackend("saveSalaryToSheet error", error);
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Simpan Rekap Gaji ke Sheet';
-  }
-}
+            if (dateObj && !isNaN(dateObj.getTime())) {
+              if (!minDate || dateObj < minDate) minDate = dateObj;
+              if (!maxDate || dateObj > maxDate) maxDate = dateObj;
+            }
+          }
+        });
+      }
 
-function renderSalaryHistoryTable() {
-  const tbody = document.getElementById("salaryHistoryTableBody");
-  if (!tbody) return;
+      if (minDate && maxDate) {
+        const startEl = document.getElementById("salStartDate");
+        const endEl = document.getElementById("salEndDate");
+        if (startEl) startEl.value = formatDateInput(minDate);
+        if (endEl) endEl.value = formatDateInput(maxDate);
+      } else {
+        setDefaultDates();
+      }
 
-  tbody.innerHTML = "";
+      calculateSalaryFromDates();
+    }
 
-  if (!salaryHistoryData || salaryHistoryData.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="8" class="text-center py-4 text-slate-400">Belum ada riwayat penggajian tersimpan.</td></tr>`;
-    return;
-  }
+    function calculateSalaryFromDates() {
+      const nameInput = document.getElementById("salEmployeeName");
+      const empName = nameInput ? nameInput.value.trim().toLowerCase() : "";
+      const startEl = document.getElementById("salStartDate");
+      const endEl = document.getElementById("salEndDate");
+      const start = startEl ? startEl.value : "";
+      const end = endEl ? endEl.value : "";
 
-  const reversed = salaryHistoryData.slice().reverse();
-  reversed.forEach(row => {
-    const salId = row["ID Gaji"] || row["ID"] || "-";
-    const payDate = row["Tanggal Bayar"] || row["Tgl Pembayaran"] || row["Tanggal"] || "-";
-    const empName = row["Nama Karyawan"] || row["Nama"] || "-";
-    const period = row["Periode"] || "-";
-    const workDays = row["Hari Kerja"] || 0;
-    const deduction = parseDecimal(row["Kasbon/Potongan"] || row["Potongan"]);
-    const netSalary = parseDecimal(row["Gaji Bersih"] || row["Total Gaji"] || row["Total"]);
+      const rateInput = document.getElementById("salDailyRate");
+      const sickInput = document.getElementById("salSickDays");
+      const dedInput = document.getElementById("salDeduction");
 
-    tbody.innerHTML += `
-      <tr class="border-b border-slate-100 dark:border-slate-800">
-        <td class="py-2.5 px-3 font-mono text-[11px]">${escapeHtml(salId)}</td>
-        <td class="py-2.5 px-3 text-slate-500">${escapeHtml(payDate)}</td>
-        <td class="py-2.5 px-3 font-bold text-slate-800 dark:text-slate-200">${escapeHtml(empName)}</td>
-        <td class="py-2.5 px-3">${escapeHtml(period)}</td>
-        <td class="py-2.5 px-3 text-center font-bold text-blue-600">${workDays} Hari</td>
-        <td class="py-2.5 px-3 text-right text-red-500">${formatRupiah(deduction)}</td>
-        <td class="py-2.5 px-3 text-right font-black text-emerald-600">${formatRupiah(netSalary)}</td>
-        <td class="py-2.5 px-3 text-center">
-          <button onclick="printSalarySlipFromRow('${escapeHtml(empName)}', '${escapeHtml(period)}', ${workDays}, ${deduction}, ${netSalary})" class="px-2 py-1 bg-brand-600 hover:bg-brand-700 text-white rounded text-[10px] font-bold">
-            <i class="fa-solid fa-print"></i> Cetak Slip
-          </button>
-        </td>
-      </tr>`;
-  });
-}
+      const dailyRate = rateInput ? (Number(rateInput.value) || 0) : 0;
+      const sickDays = sickInput ? Math.max(0, Number(sickInput.value) || 0) : 0;
+      const deduction = dedInput ? Math.max(0, Number(dedInput.value) || 0) : 0;
 
-function renderErrorLogTable() {
-  const tbody = document.getElementById("errorLogTableBody");
-  if (!tbody) return;
+      let actualWorkDays = 0;
+      const uniqueDates = new Set();
 
-  tbody.innerHTML = "";
+      if (empName.includes("owner") || empName.includes("admin")) {
+        const workDaysEl = document.getElementById("salWorkDaysDisplay");
+        const totalEl = document.getElementById("salTotalDisplay");
+        const formulaEl = document.getElementById("salDetailFormula");
+        if (workDaysEl) workDaysEl.innerText = `0 Hari (Admin/Owner)`;
+        if (totalEl) totalEl.innerText = formatRupiah(0);
+        if (formulaEl) formulaEl.innerText = "Akses Admin/Owner tidak dihitung gaji.";
+        return;
+      }
 
-  if (!errorLogData || errorLogData.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-slate-400">Tidak ada log error / bug tercatat. Sistem berjalan normal!</td></tr>`;
-    return;
-  }
+      if (start && end && attendanceData && attendanceData.length > 0) {
+        const startDate = new Date(start + "T00:00:00");
+        const endDate = new Date(end + "T23:59:59");
 
-  const reversed = errorLogData.slice().reverse();
-  reversed.forEach(row => {
-    const errId = row["ID Error"] || row["ID"] || "-";
-    const time = row["Waktu"] || row["Tanggal"] || "-";
-    const user = row["User / Role"] || row["User"] || "-";
-    const msg = row["Pesan Error"] || row["Message"] || "-";
-    const detail = row["Detail / Stack Trace"] || row["Detail"] || "-";
+        attendanceData.forEach(row => {
+          const rowRole = String(row["Role"] || row["Akses"] || Object.values(row)[3] || "").trim().toLowerCase();
+          const rowName = String(row["Nama Karyawan"] || row["Nama"] || Object.values(row)[2] || "").trim().toLowerCase();
 
-    tbody.innerHTML += `
-      <tr class="border-b border-slate-100 dark:border-slate-800 text-xs">
-        <td class="py-2.5 px-3 font-mono text-[10px] text-red-500 font-bold">${escapeHtml(errId)}</td>
-        <td class="py-2.5 px-3 text-slate-400">${escapeHtml(time)}</td>
-        <td class="py-2.5 px-3 font-semibold">${escapeHtml(user)}</td>
-        <td class="py-2.5 px-3 font-bold text-red-600 dark:text-red-400">${escapeHtml(msg)}</td>
-        <td class="py-2.5 px-3 font-mono text-[10px] text-slate-500 max-w-xs truncate" title="${escapeHtml(detail)}">${escapeHtml(detail)}</td>
-      </tr>`;
-  });
-}
+          if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) {
+            return; 
+          }
 
-function printSalarySlipFromRow(name, period, workDays, deduction, netSalary) {
-  const gross = netSalary + deduction;
+          const isNameMatch = empName !== "" && (rowName === empName || rowName.includes(empName) || empName.includes(rowName));
 
-  document.getElementById("printName").innerText = name;
-  document.getElementById("printSignEmp").innerText = `( ${name} )`;
-  document.getElementById("printPeriod").innerText = period;
-  document.getElementById("printSickDaysText").innerText = "0 Hari";
-  document.getElementById("printDate").innerText = new Date().toLocaleString("id-ID");
-  document.getElementById("printBase").innerText = `${formatRupiah(gross)} (${workDays} Hari Kerja)`;
-  document.getElementById("printDeduction").innerText = `- ${formatRupiah(deduction)}`;
-  document.getElementById("printTotal").innerText = formatRupiah(netSalary);
+          if (isNameMatch) {
+            const rawDate = row["Tanggal"] || row["Waktu"] || Object.values(row)[1] || "";
+            const dateObj = parseTransactionDate(rawDate);
 
-  window.print();
-}
+            if (dateObj && dateObj >= startDate && dateObj <= endDate) {
+              const dateKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
+              uniqueDates.add(dateKey);
+            }
+          }
+        });
 
-function printSalarySlip() {
-  calculateSalaryFromDates();
-  const name = document.getElementById("salEmployeeName").value;
-  const start = document.getElementById("salStartDate").value;
-  const end = document.getElementById("salEndDate").value;
-  const dailyRate = Number(document.getElementById("salDailyRate").value) || 0;
-  const sickDays = Number(document.getElementById("salSickDays").value) || 0;
-  const deduction = Number(document.getElementById("salDeduction").value) || 0;
+        actualWorkDays = uniqueDates.size;
+      }
 
-  let actualWorkDays = 0;
-  const uniqueDates = new Set();
+      const effectiveWorkDays = Math.max(0, actualWorkDays - sickDays);
+      const grossSalary = effectiveWorkDays * dailyRate;
+      const netSalary = Math.max(0, grossSalary - deduction);
 
-  if (start && end && attendanceData.length > 0) {
-    const startDate = new Date(start + "T00:00:00");
-    const endDate = new Date(end + "T23:59:59");
-    const empName = name.trim().toLowerCase();
+      const displayWorkDaysEl = document.getElementById("salWorkDaysDisplay");
+      if (displayWorkDaysEl) displayWorkDaysEl.innerText = `${actualWorkDays} Hari Kasir Masuk`;
 
-    attendanceData.forEach(row => {
-      const rowRole = String(row["Role"] || row["Akses"] || Object.values(row)[3] || "").trim().toLowerCase();
-      const rowName = String(row["Nama Karyawan"] || row["Nama"] || Object.values(row)[2] || "").trim().toLowerCase();
+      const displaySickEl = document.getElementById("salSickDaysDisplay");
+      if (displaySickEl) displaySickEl.innerText = `${sickDays} Hari Sakit/Izin`;
 
-      if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) return;
+      const displayTotalEl = document.getElementById("salTotalDisplay");
+      if (displayTotalEl) displayTotalEl.innerText = formatRupiah(netSalary);
 
-      if (rowName.includes(empName) || empName.includes(rowName) || empName === "") {
-        const rawDate = row["Tanggal"] || row["Waktu"] || Object.values(row)[1] || "";
-        const dateObj = parseTransactionDate(rawDate);
-        if (dateObj && dateObj >= startDate && dateObj <= endDate) {
-          const dateKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
-          uniqueDates.add(dateKey);
+      const displayFormulaEl = document.getElementById("salDetailFormula");
+      if (displayFormulaEl) {
+        displayFormulaEl.innerText = `(${effectiveWorkDays} hari masuk riil × ${formatRupiah(dailyRate)}) - ${formatRupiah(deduction)}`;
+      }
+
+      window.lastSalaryDebug = {
+        empName: empName,
+        dates: Array.from(uniqueDates),
+        count: actualWorkDays
+      };
+    }
+
+    function showSalaryDebugModal() {
+      const debugData = window.lastSalaryDebug;
+      if (!debugData || !debugData.dates || debugData.dates.length === 0) {
+        alert("Belum ada data tanggal absensi kasir yang terdeteksi pada rentang ini.");
+        return;
+      }
+
+      alert(`DETAIL ABSENSI KASIR (${debugData.empName.toUpperCase()}):\n\nTotal Hari Masuk: ${debugData.count} Hari\n\nTanggal Kehadiran:\n- ` + debugData.dates.join("\n- "));
+    }
+
+    async function saveSalaryToSheet() {
+      const nameEl = document.getElementById("salEmployeeName");
+      const startEl = document.getElementById("salStartDate");
+      const endEl = document.getElementById("salEndDate");
+      const rateEl = document.getElementById("salDailyRate");
+      const sickEl = document.getElementById("salSickDays");
+      const dedEl = document.getElementById("salDeduction");
+
+      const name = nameEl ? nameEl.value : "";
+      const start = startEl ? startEl.value : "";
+      const end = endEl ? endEl.value : "";
+      const dailyRate = rateEl ? (Number(rateEl.value) || 0) : 0;
+      const sickDays = sickEl ? (Number(sickEl.value) || 0) : 0;
+      const deduction = dedEl ? (Number(dedEl.value) || 0) : 0;
+
+      function displayDate(value) {
+        if (!value) return "-";
+        const [y,m,d] = value.split("-");
+        return `${d}/${m}/${y}`;
+      }
+
+      let actualWorkDays = 0;
+      const uniqueDates = new Set();
+      if (start && end && attendanceData.length > 0) {
+        const startDate = new Date(start + "T00:00:00");
+        const endDate = new Date(end + "T23:59:59");
+        const empName = name.trim().toLowerCase();
+
+        attendanceData.forEach(row => {
+          const rowRole = String(row["Role"] || row["Akses"] || Object.values(row)[3] || "").trim().toLowerCase();
+          const rowName = String(row["Nama Karyawan"] || row["Nama"] || Object.values(row)[2] || "").trim().toLowerCase();
+
+          if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) return;
+
+          if (rowName.includes(empName) || empName.includes(rowName) || empName === "") {
+            const rawDate = row["Tanggal"] || row["Waktu"] || Object.values(row)[1] || "";
+            const dateObj = parseTransactionDate(rawDate);
+            if (dateObj && dateObj >= startDate && dateObj <= endDate) {
+              const dateKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
+              uniqueDates.add(dateKey);
+            }
+          }
+        });
+
+        actualWorkDays = uniqueDates.size;
+      }
+
+      const effective = Math.max(0, actualWorkDays - sickDays);
+      const gross = effective * dailyRate;
+      const net = Math.max(0, gross - deduction);
+      const periodStr = `${displayDate(start)} - ${displayDate(end)}`;
+
+      if (!confirm(`Simpan rekap gaji untuk ${name} periode ${periodStr} dengan Total Bersih ${formatRupiah(net)} ke Google Sheets?`)) return;
+
+      const btn = document.getElementById("btnSaveSalary");
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
+      }
+
+      try {
+        const payload = {
+          action: "saveSalary",
+          employeeName: name,
+          period: periodStr,
+          workDays: effective,
+          deduction: deduction,
+          netSalary: net,
+          notes: `Gaji Pokok: ${formatRupiah(gross)} (${effective} Hari)`
+        };
+
+        const response = await fetch(APPS_SCRIPT_URL, { method: "POST", body: JSON.stringify(payload) });
+        const res = await response.json();
+
+        if (res.status === "success") {
+          alert("Rekap gaji berhasil disimpan!");
+          await fetchSalesData();
+        } else { alert("Gagal menyimpan rekap gaji: " + (res.message || "Error server")); }
+      } catch (error) {
+        console.error(error);
+        alert("Terjadi kesalahan jaringan.");
+        reportErrorToBackend("saveSalaryToSheet error", error);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Simpan Rekap Gaji ke Sheet';
         }
       }
-    });
+    }
 
-    actualWorkDays = uniqueDates.size;
-  }
+    function renderSalaryHistoryTable() {
+      const tbody = document.getElementById("salaryHistoryTableBody");
+      if (!tbody) return;
 
-  const effective = Math.max(0, actualWorkDays - sickDays);
-  const gross = effective * dailyRate;
-  const net = Math.max(0, gross - deduction);
+      tbody.innerHTML = "";
 
-  function displayDate(value) {
-    if (!value) return "-";
-    const [y,m,d] = value.split("-");
-    return `${d}/${m}/${y}`;
-  }
+      if (!salaryHistoryData || salaryHistoryData.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="8" class="text-center py-4 text-slate-400">Belum ada riwayat penggajian tersimpan.</td></tr>`;
+        return;
+      }
 
-  document.getElementById("printName").innerText = name;
-  document.getElementById("printSignEmp").innerText = `( ${name} )`;
-  document.getElementById("printPeriod").innerText = `${displayDate(start)} s/d ${displayDate(end)} (${actualWorkDays} Hari Kerja)`;
-  document.getElementById("printSickDaysText").innerText = `${sickDays} Hari`;
-  document.getElementById("printDate").innerText = new Date().toLocaleString("id-ID");
-  document.getElementById("printBase").innerText = `${formatRupiah(gross)} (${effective} hari × ${formatRupiah(dailyRate)})`;
-  document.getElementById("printDeduction").innerText = `- ${formatRupiah(deduction)}`;
-  document.getElementById("printTotal").innerText = formatRupiah(net);
+      const reversed = salaryHistoryData.slice().reverse();
+      reversed.forEach(row => {
+        const salId = row["ID Gaji"] || row["ID"] || "-";
+        const payDate = row["Tanggal Bayar"] || row["Tgl Pembayaran"] || row["Tanggal"] || "-";
+        const empName = row["Nama Karyawan"] || row["Nama"] || "-";
+        const period = row["Periode"] || "-";
+        const workDays = row["Hari Kerja"] || 0;
+        const deduction = parseDecimal(row["Kasbon/Potongan"] || row["Potongan"]);
+        const netSalary = parseDecimal(row["Gaji Bersih"] || row["Total Gaji"] || row["Total"]);
 
-  window.print();
-}
+        tbody.innerHTML += `
+          <tr class="border-b border-slate-100 dark:border-slate-800">
+            <td class="py-2.5 px-3 font-mono text-[11px]">${escapeHtml(salId)}</td>
+            <td class="py-2.5 px-3 text-slate-500">${escapeHtml(payDate)}</td>
+            <td class="py-2.5 px-3 font-bold text-slate-800 dark:text-slate-200">${escapeHtml(empName)}</td>
+            <td class="py-2.5 px-3">${escapeHtml(period)}</td>
+            <td class="py-2.5 px-3 text-center font-bold text-blue-600">${workDays} Hari</td>
+            <td class="py-2.5 px-3 text-right text-red-500">${formatRupiah(deduction)}</td>
+            <td class="py-2.5 px-3 text-right font-black text-emerald-600">${formatRupiah(netSalary)}</td>
+            <td class="py-2.5 px-3 text-center">
+              <button onclick="printSalarySlipFromRow('${escapeHtml(empName)}', '${escapeHtml(period)}', ${workDays}, ${deduction}, ${netSalary})" class="px-2 py-1 bg-brand-600 hover:bg-brand-700 text-white rounded text-[10px] font-bold">
+                <i class="fa-solid fa-print"></i> Cetak Slip
+              </button>
+            </td>
+          </tr>`;
+      });
+    }
 
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js')
-      .then(reg => console.log('Service Worker Registered! Scope:', reg.scope))
-      .catch(err => console.log('Service Worker Error:', err));
-  });
-}
-</script>
+    function renderErrorLogTable() {
+      const tbody = document.getElementById("errorLogTableBody");
+      if (!tbody) return;
+
+      tbody.innerHTML = "";
+
+      if (!errorLogData || errorLogData.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-slate-400">Tidak ada log error / bug tercatat. Sistem berjalan normal!</td></tr>`;
+        return;
+      }
+
+      const reversed = errorLogData.slice().reverse();
+      reversed.forEach(row => {
+        const errId = row["ID Error"] || row["ID"] || "-";
+        const time = row["Waktu"] || row["Tanggal"] || "-";
+        const user = row["User / Role"] || row["User"] || "-";
+        const msg = row["Pesan Error"] || row["Message"] || "-";
+        const detail = row["Detail / Stack Trace"] || row["Detail"] || "-";
+
+        tbody.innerHTML += `
+          <tr class="border-b border-slate-100 dark:border-slate-800 text-xs">
+            <td class="py-2.5 px-3 font-mono text-[10px] text-red-500 font-bold">${escapeHtml(errId)}</td>
+            <td class="py-2.5 px-3 text-slate-400">${escapeHtml(time)}</td>
+            <td class="py-2.5 px-3 font-semibold">${escapeHtml(user)}</td>
+            <td class="py-2.5 px-3 font-bold text-red-600 dark:text-red-400">${escapeHtml(msg)}</td>
+            <td class="py-2.5 px-3 font-mono text-[10px] text-slate-500 max-w-xs truncate" title="${escapeHtml(detail)}">${escapeHtml(detail)}</td>
+          </tr>`;
+      });
+    }
+
+    function printSalarySlipFromRow(name, period, workDays, deduction, netSalary) {
+      const gross = netSalary + deduction;
+
+      const printNameEl = document.getElementById("printName");
+      const printSignEl = document.getElementById("printSignEmp");
+      const printPeriodEl = document.getElementById("printPeriod");
+      const printSickEl = document.getElementById("printSickDaysText");
+      const printDateEl = document.getElementById("printDate");
+      const printBaseEl = document.getElementById("printBase");
+      const printDeductionEl = document.getElementById("printDeduction");
+      const printTotalEl = document.getElementById("printTotal");
+
+      if (printNameEl) printNameEl.innerText = name;
+      if (printSignEl) printSignEl.innerText = `( ${name} )`;
+      if (printPeriodEl) printPeriodEl.innerText = period;
+      if (printSickEl) printSickEl.innerText = "0 Hari";
+      if (printDateEl) printDateEl.innerText = new Date().toLocaleString("id-ID");
+      if (printBaseEl) printBaseEl.innerText = `${formatRupiah(gross)} (${workDays} Hari Kerja)`;
+      if (printDeductionEl) printDeductionEl.innerText = `- ${formatRupiah(deduction)}`;
+      if (printTotalEl) printTotalEl.innerText = formatRupiah(netSalary);
+
+      window.print();
+    }
+
+    function printSalarySlip() {
+      calculateSalaryFromDates();
+      const nameInput = document.getElementById("salEmployeeName");
+      const name = nameInput ? nameInput.value : "";
+      const startEl = document.getElementById("salStartDate");
+      const endEl = document.getElementById("salEndDate");
+      const start = startEl ? startEl.value : "";
+      const end = endEl ? endEl.value : "";
+
+      const rateInput = document.getElementById("salDailyRate");
+      const sickInput = document.getElementById("salSickDays");
+      const dedInput = document.getElementById("salDeduction");
+
+      const dailyRate = rateInput ? (Number(rateInput.value) || 0) : 0;
+      const sickDays = sickInput ? (Number(sickInput.value) || 0) : 0;
+      const deduction = dedInput ? (Number(dedInput.value) || 0) : 0;
+
+      let actualWorkDays = 0;
+      const uniqueDates = new Set();
+
+      if (start && end && attendanceData.length > 0) {
+        const startDate = new Date(start + "T00:00:00");
+        const endDate = new Date(end + "T23:59:59");
+        const empName = name.trim().toLowerCase();
+
+        attendanceData.forEach(row => {
+          const rowRole = String(row["Role"] || row["Akses"] || Object.values(row)[3] || "").trim().toLowerCase();
+          const rowName = String(row["Nama Karyawan"] || row["Nama"] || Object.values(row)[2] || "").trim().toLowerCase();
+
+          if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) return;
+
+          if (rowName.includes(empName) || empName.includes(rowName) || empName === "") {
+            const rawDate = row["Tanggal"] || row["Waktu"] || Object.values(row)[1] || "";
+            const dateObj = parseTransactionDate(rawDate);
+            if (dateObj && dateObj >= startDate && dateObj <= endDate) {
+              const dateKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
+              uniqueDates.add(dateKey);
+            }
+          }
+        });
+
+        actualWorkDays = uniqueDates.size;
+      }
+
+      const effective = Math.max(0, actualWorkDays - sickDays);
+      const gross = effective * dailyRate;
+      const net = Math.max(0, gross - deduction);
+
+      function displayDate(value) {
+        if (!value) return "-";
+        const [y,m,d] = value.split("-");
+        return `${d}/${m}/${y}`;
+      }
+
+      const printNameEl = document.getElementById("printName");
+      const printSignEl = document.getElementById("printSignEmp");
+      const printPeriodEl = document.getElementById("printPeriod");
+      const printSickEl = document.getElementById("printSickDaysText");
+      const printDateEl = document.getElementById("printDate");
+      const printBaseEl = document.getElementById("printBase");
+      const printDeductionEl = document.getElementById("printDeduction");
+      const printTotalEl = document.getElementById("printTotal");
+
+      if (printNameEl) printNameEl.innerText = name;
+      if (printSignEl) printSignEl.innerText = `( ${name} )`;
+      if (printPeriodEl) printPeriodEl.innerText = `${displayDate(start)} s/d ${displayDate(end)} (${actualWorkDays} Hari Kerja)`;
+      if (printSickEl) printSickEl.innerText = `${sickDays} Hari`;
+      if (printDateEl) printDateEl.innerText = new Date().toLocaleString("id-ID");
+      if (printBaseEl) printBaseEl.innerText = `${formatRupiah(gross)} (${effective} hari × ${formatRupiah(dailyRate)})`;
+      if (printDeductionEl) printDeductionEl.innerText = `- ${formatRupiah(deduction)}`;
+      if (printTotalEl) printTotalEl.innerText = formatRupiah(net);
+
+      window.print();
+    }
+
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js')
+          .then(reg => console.log('Service Worker Registered! Scope:', reg.scope))
+          .catch(err => console.log('Service Worker Error:', err));
+      });
+    }
+  </script>
 </body>
 </html>
