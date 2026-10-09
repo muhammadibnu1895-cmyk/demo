@@ -1,5 +1,4 @@
-<!DOCTYPE html>
-<html lang="id" class="h-full">
+class="h-full">
 
 <head>
   <meta charset="UTF-8">
@@ -76,9 +75,10 @@
     }
   </style>
 
-  <!-- SINGLE SCRIPT BLOK TERPADU -->
+  <!-- SCRIPT UTAMA PERTAMA -->
   <script>
-    const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzOEF-gxRjI061DUiZ2eAQR6iVSfIO0JRs-Oo7YLTkzH07H8SfgMfAexbstCd6bdMSfZQ/exec";
+    // GANTI URL DI BAWAH INI DENGAN URL DEPLOYMENT GOOGLE APPS SCRIPT ANDA
+    const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzOEF-gxRjI061DUiZ2eAQR6iVSfIO0JRs-Oo7YLTkzH07H8SfgMfAexbstCd6bdMSfZQ/exec/exec";
 
     let cart = [];
     let salesData = [];
@@ -186,7 +186,6 @@
       return isNaN(parsedDirect.getTime()) ? null : parsedDirect;
     }
 
-    // FUNGSI KERANJANG BELANJA
     function addToCart(namaProduk, harga) {
       const existing = cart.find(item => item.namaProduk === namaProduk);
       if (existing) { existing.jumlah++; } else { cart.push({ namaProduk, harga, jumlah: 1 }); }
@@ -238,168 +237,6 @@
       if (btnPay) btnPay.disabled = cart.length === 0;
     }
 
-    function setPaymentMethod(method) {
-      currentPaymentMethod = method;
-      const btnTunai = document.getElementById("btnPayTunai");
-      const btnNonTunai = document.getElementById("btnPayNonTunai");
-      const cashInputGroup = document.getElementById("cashInputGroup");
-      const total = getCartTotal();
-
-      if (method === "Tunai") {
-        if (btnTunai) btnTunai.className = "py-2.5 px-3 rounded-xl border border-brand-500 bg-brand-50 dark:bg-brand-950/50 text-brand-600 dark:text-brand-400 font-bold text-xs flex items-center justify-center gap-2 transition";
-        if (btnNonTunai) btnNonTunai.className = "py-2.5 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold text-xs flex items-center justify-center gap-2 transition";
-        if (cashInputGroup) cashInputGroup.classList.remove("hidden");
-        const payAmountInput = document.getElementById("modalPayAmount");
-        if (payAmountInput) payAmountInput.value = total;
-        calcModalChange();
-      } else {
-        if (btnNonTunai) btnNonTunai.className = "py-2.5 px-3 rounded-xl border border-brand-500 bg-brand-50 dark:bg-brand-950/50 text-brand-600 dark:text-brand-400 font-bold text-xs flex items-center justify-center gap-2 transition";
-        if (btnTunai) btnTunai.className = "py-2.5 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold text-xs flex items-center justify-center gap-2 transition";
-        if (cashInputGroup) cashInputGroup.classList.add("hidden");
-        const payAmountInput = document.getElementById("modalPayAmount");
-        if (payAmountInput) payAmountInput.value = total;
-      }
-    }
-
-    function openPaymentModal() {
-      if (!cart.length) return;
-      const total = getCartTotal();
-      const totalBillEl = document.getElementById("modalTotalBill");
-      if (totalBillEl) totalBillEl.innerText = formatRupiah(total);
-      const summary = document.getElementById("modalCartSummary");
-      if (summary) summary.innerHTML = "";
-
-      cart.forEach(item => {
-        if (summary) {
-          summary.innerHTML += `
-            <div class="flex justify-between text-xs font-medium">
-              <span>${escapeHtml(item.namaProduk)} (${item.jumlah}x)</span>
-              <span>${formatRupiah(item.harga * item.jumlah)}</span>
-            </div>`;
-        }
-      });
-
-      const quick = document.getElementById("quickMoneyButtons");
-      const rounded10 = Math.ceil(total / 10000) * 10000;
-      const rounded50 = Math.ceil(total / 50000) * 50000;
-
-      if (quick) {
-        quick.innerHTML = `
-          <button onclick="setModalPayAmount(${total})" class="px-2.5 py-1 bg-slate-200 dark:bg-slate-700 text-[11px] font-bold rounded-lg">Uang Pas</button>
-          <button onclick="setModalPayAmount(${rounded10})" class="px-2.5 py-1 bg-slate-200 dark:bg-slate-700 text-[11px] font-bold rounded-lg">${formatRupiah(rounded10)}</button>
-          <button onclick="setModalPayAmount(${rounded50})" class="px-2.5 py-1 bg-slate-200 dark:bg-slate-700 text-[11px] font-bold rounded-lg">${formatRupiah(rounded50)}</button>
-          <button onclick="setModalPayAmount(100000)" class="px-2.5 py-1 bg-slate-200 dark:bg-slate-700 text-[11px] font-bold rounded-lg">Rp 100.000</button>`;
-      }
-
-      setPaymentMethod("Tunai");
-      const modal = document.getElementById("paymentModal");
-      if (modal) modal.classList.remove("hidden");
-    }
-
-    function setModalPayAmount(value) {
-      const input = document.getElementById("modalPayAmount");
-      if (input) input.value = value;
-      calcModalChange();
-    }
-
-    function calcModalChange() {
-      const total = getCartTotal();
-      const input = document.getElementById("modalPayAmount");
-      const pay = input ? (Number(input.value) || 0) : 0;
-      const change = pay - total;
-      const el = document.getElementById("modalChangeAmount");
-
-      if (el) {
-        if (change >= 0) {
-          el.innerText = formatRupiah(change);
-          el.className = "font-black text-base text-emerald-600";
-        } else {
-          el.innerText = "Kurang!";
-          el.className = "font-black text-base text-red-500";
-        }
-      }
-    }
-
-    function closePaymentModal() {
-      const modal = document.getElementById("paymentModal");
-      if (modal) modal.classList.add("hidden");
-    }
-
-    async function submitTransaction() {
-      const total = getCartTotal();
-      const input = document.getElementById("modalPayAmount");
-      const pay = currentPaymentMethod === "Tunai" ? (input ? (Number(input.value) || 0) : 0) : total;
-      if (pay < total) { alert("Nominal pembayaran masih kurang."); return; }
-
-      const payload = {
-        action: "sale",
-        metodePembayaran: currentPaymentMethod,
-        items: cart.map(item => ({ namaProduk: item.namaProduk, jumlah: item.jumlah })),
-        uangBayar: pay
-      };
-
-      const btn = document.getElementById("btnConfirmPay");
-      if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
-      }
-
-      try {
-        const response = await fetch(APPS_SCRIPT_URL, { method: "POST", body: JSON.stringify(payload) });
-        const data = await response.json();
-
-        if (data.status === "success") {
-          const transactionId = data.transactionId;
-          const change = currentPaymentMethod === "Tunai" ? (data.kembalian ?? (pay - total)) : 0;
-          closePaymentModal();
-          const shouldPrint = confirm("Transaksi berhasil!\n\nID: " + transactionId + "\nMetode: " + currentPaymentMethod + "\nKembalian: " + formatRupiah(change) + "\n\nCetak struk?");
-          if (shouldPrint) { printReceipt(transactionId, cart, total, pay, change, currentPaymentMethod); }
-          clearCart();
-          await fetchSalesData();
-        } else { alert("Gagal: " + (data.message || "Transaksi gagal.")); }
-      } catch (error) {
-        console.error(error);
-        alert("Terjadi kesalahan jaringan.");
-        reportErrorToBackend("submitTransaction error", error);
-      } finally {
-        if (btn) {
-          btn.disabled = false;
-          btn.innerHTML = '<i class="fa-solid fa-check-circle"></i> Selesaikan Transaksi';
-        }
-      }
-    }
-
-    function printReceipt(trxId, items, total, pay, change, method = "Tunai") {
-      const dateEl = document.getElementById("rcptDate");
-      const idEl = document.getElementById("rcptId");
-      const methodEl = document.getElementById("rcptMethod");
-      if (dateEl) dateEl.innerText = new Date().toLocaleString("id-ID");
-      if (idEl) idEl.innerText = "ID: " + trxId;
-      if (methodEl) methodEl.innerText = method;
-
-      const container = document.getElementById("rcptItems");
-      if (container) {
-        container.innerHTML = "";
-        items.forEach(item => {
-          container.innerHTML += `
-            <div class="flex justify-between text-[11px]">
-              <span>${escapeHtml(item.namaProduk)} x${item.jumlah}</span>
-              <span>${formatRupiah(item.harga * item.jumlah)}</span>
-            </div>`;
-        });
-      }
-
-      const totalEl = document.getElementById("rcptTotal");
-      const payEl = document.getElementById("rcptPay");
-      const changeEl = document.getElementById("rcptChange");
-      if (totalEl) totalEl.innerText = formatRupiah(total);
-      if (payEl) payEl.innerText = formatRupiah(pay);
-      if (changeEl) changeEl.innerText = formatRupiah(change);
-
-      window.print();
-    }
-
-    // INITALISASI APLIKASI
     function calculateSalaryFromDates() {
       const nameInput = document.getElementById("salEmployeeName");
       const empName = nameInput ? nameInput.value.trim().toLowerCase() : "";
@@ -1978,7 +1815,8 @@
     }
   </script>
 </head>
-
+Bagian 2: Sambungkan Tepat di Bawah Bagian 1
+HTML
 <body class="bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 min-h-screen font-sans transition-colors">
 
   <!-- LOGIN MODAL -->
@@ -2273,7 +2111,7 @@
           </div>
         </div>
 
-        <!-- ANALYSIS JAM RAMAI -->
+        <!-- FITUR ANALYSIS JAM RAMAI (PEAK HOURS) -->
         <div class="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm space-y-4">
           <div class="border-b border-slate-100 dark:border-slate-800 pb-3 flex justify-between items-center">
             <div>
@@ -2517,4 +2355,34 @@
                 <tr>
                   <th class="py-3 px-3">ID Kasbon</th>
                   <th class="py-3 px-3">Tanggal</th>
-                  <th class="py-3 px
+                  <th class="py-3 px-3">Nama Karyawan</th>
+                  <th class="py-3 px-3 text-right">Nominal (Rp)</th>
+                  <th class="py-3 px-3">Keterangan</th>
+                  <th class="py-3 px-3 text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody id="kasbonHistoryTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- TABEL RIWAYAT DATA GAJI -->
+        <section class="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm space-y-4">
+          <div class="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-3">
+            <h3 class="text-base font-bold"><i class="fa-solid fa-file-invoice-dollar text-emerald-600"></i> Riwayat Pembayaran Gaji Karyawan</h3>
+            <button onclick="fetchSalesData()" class="px-3 py-1 bg-slate-100 dark:bg-slate-800 text-xs font-bold rounded-lg hover:bg-slate-200 transition">
+              <i class="fa-solid fa-rotate"></i> Refresh Data
+            </button>
+          </div>
+          <div class="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
+            <table class="w-full text-xs text-left">
+              <thead class="bg-slate-50 dark:bg-slate-800">
+                <tr>
+                  <th class="py-3 px-3">ID Gaji</th>
+                  <th class="py-3 px-3">Tgl Pembayaran</th>
+                  <th class="py-3 px-3">Nama Karyawan</th>
+                  <th class="py-3 px-3">Periode</th>
+                  <th class="py-3 px-3 text-center">Hari Kerja</th>
+                  <th class="py-3 px-3 text-right">Potongan</th>
+                  <th class="py-3 px-3 text-right">Gaji Bersih</th>
+                  <th class="py-3 px-3 text-center">Aksi</th>
