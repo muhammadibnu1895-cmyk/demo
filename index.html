@@ -1186,7 +1186,84 @@
       const modal = document.getElementById("paymentModal");
       if (modal) modal.classList.add("hidden");
     }
+async function saveSalaryToSheet() {
+  const nameInput = document.getElementById("salEmployeeName");
+  const name = nameInput ? nameInput.value.trim() : "";
+  const start = document.getElementById("salStartDate").value;
+  const end = document.getElementById("salEndDate").value;
+  const dedInput = document.getElementById("salDeduction");
+  const deduction = dedInput ? (Number(dedInput.value) || 0) : 0;
 
+  if (!name || name.toLowerCase().includes("owner") || name.toLowerCase().includes("admin")) {
+    alert("Pilih nama kasir yang valid terlebih dahulu.");
+    return;
+  }
+
+  function displayDate(value) {
+    if (!value) return "-";
+    const [y, m, d] = value.split("-");
+    return `${d}/${m}/${y}`;
+  }
+
+  // AMBIL ANGKA LANGSUNG DARI TEKS YANG TAMPIL DI LAYAR VISUAL
+  const totalDisplayEl = document.getElementById("salTotalDisplay");
+  const totalText = totalDisplayEl ? totalDisplayEl.innerText : "0";
+  const netSalaryFromUI = getNumericValue(totalText);
+
+  const workDaysText = document.getElementById("salWorkDaysDisplay") ? document.getElementById("salWorkDaysDisplay").innerText : "0";
+  const workDaysFromUI = getNumericValue(workDaysText);
+
+  const periodStr = `${displayDate(start)} - ${displayDate(end)}`;
+
+  if (netSalaryFromUI <= 0) {
+    alert("Nominal Gaji Bersih di layar masih Rp 0. Tidak ada data yang disimpan.");
+    return;
+  }
+
+  if (!confirm(`Simpan rekap gaji ke Google Sheets?\n\nNama: ${name}\nPeriode: ${periodStr}\nHari Kerja: ${workDaysFromUI} Hari\nTotal Bersih: ${formatRupiah(netSalaryFromUI)}`)) {
+    return;
+  }
+
+  const btn = document.getElementById("btnSaveSalary");
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
+  }
+
+  try {
+    const payload = {
+      action: "saveSalary",
+      employeeName: name,
+      period: periodStr,
+      workDays: Number(workDaysFromUI),
+      deduction: Number(deduction),
+      netSalary: Number(netSalaryFromUI), // Angka integer murni (tanpa Rp / titik)
+      notes: `Gaji Pokok: ${formatRupiah(netSalaryFromUI + deduction)}`
+    };
+
+    const response = await fetch(APPS_SCRIPT_URL, { 
+      method: "POST", 
+      body: JSON.stringify(payload) 
+    });
+    const res = await response.json();
+
+    if (res.status === "success") {
+      alert("Rekap gaji berhasil disimpan ke Google Sheets!");
+      await fetchSalesData(); // Refresh tabel riwayat gaji
+    } else { 
+      alert("Gagal menyimpan rekap gaji: " + (res.message || "Error server")); 
+    }
+  } catch (error) {
+    console.error(error);
+    alert("Terjadi kesalahan jaringan.");
+    reportErrorToBackend("saveSalaryToSheet error", error);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Simpan Rekap Gaji ke Sheet';
+    }
+  }
+}
     async function submitTransaction() {
       const total = getCartTotal();
       const input = document.getElementById("modalPayAmount");
