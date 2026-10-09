@@ -2265,122 +2265,38 @@
     }
 
     // FUNGSI MENYIMPAN REKAP GAJI KE GOOGLE SHEETS (SINKRON 100% DENGAN LAYAR)
-async function saveSalaryToSheet() {
-  // Pastikan kalkulasi terbaru sudah berjalan
-  calculateSalaryFromDates();
+function saveSalaryRecord(data) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("Gaji");
 
-  const nameInput = document.getElementById("salEmployeeName");
-  const name = nameInput ? nameInput.value.trim() : "";
-  const start = document.getElementById("salStartDate").value;
-  const end = document.getElementById("salEndDate").value;
-  const dailyRate = Number(document.getElementById("salDailyRate").value) || 0;
-  const sickDays = Number(document.getElementById("salSickDays").value) || 0;
-  const deduction = Number(document.getElementById("salDeduction").value) || 0;
-
-  if (!name || name.toLowerCase().includes("owner") || name.toLowerCase().includes("admin")) {
-    alert("Pilih nama kasir yang valid terlebih dahulu.");
-    return;
+  if (!sheet) {
+    sheet = ss.insertSheet("Gaji");
+    sheet.appendRow(["ID Gaji", "Tanggal Bayar", "Nama Karyawan", "Periode", "Hari Kerja", "Kasbon/Potongan", "Gaji Bersih", "Catatan"]);
   }
 
-  function displayDate(value) {
-    if (!value) return "-";
-    const [y, m, d] = value.split("-");
-    return `${d}/${m}/${y}`;
-  }
+  var now = new Date();
+  var timeStr = Utilities.formatDate(now, ss.getSpreadsheetTimeZone(), "dd/MM/yyyy HH:mm:ss");
 
-  // 1. HITUNG HARI KERJA DARI ABSENSI
-  let actualWorkDays = 0;
-  const uniqueDates = new Set();
-  
-  if (start && end && attendanceData && attendanceData.length > 0) {
-    const startDate = new Date(start + "T00:00:00");
-    const endDate = new Date(end + "T23:59:59");
-    const empName = name.toLowerCase();
+  // Paksa konversi ke Angka Murni (Number) agar tidak terbaca 0 / Kosong
+  var netSalaryNum = Number(data.netSalary) || Number(String(data.netSalary || "").replace(/[^0-9-]/g, "")) || 0;
+  var deductionNum = Number(data.deduction) || Number(String(data.deduction || "").replace(/[^0-9-]/g, "")) || 0;
+  var workDaysNum = Number(data.workDays) || 0;
 
-    attendanceData.forEach(row => {
-      const rowRole = String(row["Role"] || row["Akses"] || Object.values(row)[3] || "").trim().toLowerCase();
-      const rowName = String(row["Nama Karyawan"] || row["Nama"] || Object.values(row)[2] || "").trim().toLowerCase();
+  sheet.appendRow([
+    "SAL-" + now.getTime(),
+    timeStr,
+    String(data.employeeName || "-"),
+    String(data.period || "-"),
+    workDaysNum,
+    deductionNum,
+    netSalaryNum,
+    String(data.notes || "Gaji Kasir")
+  ]);
 
-      if (rowRole.includes("admin") || rowRole.includes("owner") || rowName.includes("owner") || rowName.includes("admin")) return;
-
-      if (rowName === empName || rowName.includes(empName) || empName.includes(rowName)) {
-        const rawDate = row["Tanggal"] || row["Waktu"] || Object.values(row)[1] || "";
-        const dateObj = parseTransactionDate(rawDate);
-        if (dateObj && dateObj >= startDate && dateObj <= endDate) {
-          const dateKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
-          uniqueDates.add(dateKey);
-        }
-      }
-    });
-
-    actualWorkDays = uniqueDates.size;
-  }
-
-  const effectiveWorkDays = Math.max(0, actualWorkDays - sickDays);
-  
-  // 2. HITUNG NOMINAL GAJI (AMBIL DARILAYAR JIKA HASIL KALKULASI ULANG KOSONG)
-  let netSalary = effectiveWorkDays * dailyRate - deduction;
-  
-  // Jika kalkulasi ulang bernilai <= 0 tapi di layar ada nominalnya, ambil angka dari tampilan layar
-  const displayTotalText = document.getElementById("salTotalDisplay") ? document.getElementById("salTotalDisplay").innerText : "";
-  const displayNumeric = getNumericValue(displayTotalText);
-
-  if (displayNumeric > 0) {
-    netSalary = displayNumeric; // Pakai angka yang tampil di layar
-  } else {
-    netSalary = Math.max(0, netSalary);
-  }
-
-  const periodStr = `${displayDate(start)} - ${displayDate(end)}`;
-
-  if (netSalary <= 0) {
-    alert("Total gaji bersih masih Rp 0. Pastikan data absensi dan gaji harian sudah terisi.");
-    return;
-  }
-
-  if (!confirm(`Simpan rekap gaji untuk ${name}\nPeriode: ${periodStr}\nHari Kerja: ${effectiveWorkDays} Hari\nTotal Bersih: ${formatRupiah(netSalary)}\n\nKe Google Sheets?`)) {
-    return;
-  }
-
-  const btn = document.getElementById("btnSaveSalary");
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...';
-  }
-
-  try {
-    const payload = {
-      action: "saveSalary",
-      employeeName: name,
-      period: periodStr,
-      workDays: effectiveWorkDays,
-      deduction: deduction,
-      netSalary: netSalary,
-      notes: `Gaji Pokok: ${formatRupiah(effectiveWorkDays * dailyRate)} (${effectiveWorkDays} Hari)`
-    };
-
-    const response = await fetch(APPS_SCRIPT_URL, { 
-      method: "POST", 
-      body: JSON.stringify(payload) 
-    });
-    const res = await response.json();
-
-    if (res.status === "success") {
-      alert("Rekap gaji berhasil disimpan ke Google Sheets!");
-      await fetchSalesData(); // Refresh data riwayat gaji
-    } else { 
-      alert("Gagal menyimpan rekap gaji: " + (res.message || "Error server")); 
-    }
-  } catch (error) {
-    console.error(error);
-    alert("Terjadi kesalahan jaringan.");
-    reportErrorToBackend("saveSalaryToSheet error", error);
-  } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Simpan Rekap Gaji ke Sheet';
-    }
-  }
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    message: "Data gaji berhasil disimpan ke Google Sheets!"
+  })).setMimeType(ContentService.MimeType.JSON);
 }
 
     function renderSalaryHistoryTable() {
